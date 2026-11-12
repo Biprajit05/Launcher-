@@ -28,7 +28,7 @@ class AppAdapter(
         val icon: ImageView = v.findViewById(R.id.icon)
         val label: TextView = v.findViewById(R.id.label)
 
-        @SuppressLint("ClickableViewAccessibility")
+
         init {
             if (onWallpaper) {
                 label.setTextColor(Color.WHITE)
