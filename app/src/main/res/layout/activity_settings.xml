@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Open animation style" android:textSize="16sp" android:textStyle="bold" />
+        <RadioGroup android:id="@+id/styleGroup" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <RadioButton android:id="@+id/styleScale" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Scale from icon" />
+            <RadioButton android:id="@+id/styleFade" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Fade" />
+            <RadioButton android:id="@+id/styleSlide" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Slide up" />
+        </RadioGroup>
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" android:text="Animation speed" android:textSize="16sp" android:textStyle="bold" />
+        <RadioGroup android:id="@+id/speedGroup" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <RadioButton android:id="@+id/speedFast" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Fast (250 ms)" />
+            <RadioButton android:id="@+id/speedNormal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Normal (450 ms)" />
+            <RadioButton android:id="@+id/speedSlow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Slow (800 ms)" />
+        </RadioGroup>
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" android:text="Grid columns" android:textSize="16sp" android:textStyle="bold" />
+        <RadioGroup android:id="@+id/colsGroup" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <RadioButton android:id="@+id/cols4" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="4" />
+            <RadioButton android:id="@+id/cols5" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="5" />
+        </RadioGroup>
+    </LinearLayout>
+</ScrollView>
