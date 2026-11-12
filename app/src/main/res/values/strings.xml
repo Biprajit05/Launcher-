@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Simple Launcher</string>
+    <string name="search_hint">Search apps</string>
+    <string name="app_info">App info</string>
+    <string name="uninstall">Uninstall</string>
+    <string name="settings">Settings</string>
+</resources>
