@@ -11,6 +11,8 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 
 class AppAdapter(
+    private val prefs: Prefs,
+    private val columns: () -> Int,
     private val onWallpaper: Boolean,
     private val onClick: (AppInfo, View) -> Unit,
     private val onLongClick: (AppInfo, View) -> Unit
@@ -27,7 +29,6 @@ class AppAdapter(
     inner class VH(v: View) : RecyclerView.ViewHolder(v) {
         val icon: ImageView = v.findViewById(R.id.icon)
         val label: TextView = v.findViewById(R.id.label)
-
 
         init {
             if (onWallpaper) {
@@ -56,8 +57,7 @@ class AppAdapter(
 
     override fun onBindViewHolder(holder: VH, position: Int) {
         val app = items[position]
-        holder.icon.setImageDrawable(app.icon.constantState?.newDrawable() ?: app.icon)
-        holder.label.text = app.label
+        IconStyle.bindIcon(holder.icon, holder.label, app, prefs.shape, prefs.scale, columns())
     }
 
     override fun getItemCount() = items.size

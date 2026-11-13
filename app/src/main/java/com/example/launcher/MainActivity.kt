@@ -5,29 +5,38 @@ import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.app.ActivityOptions
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.Configuration
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.PopupMenu
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.updatePadding
 import androidx.core.widget.doAfterTextChanged
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.util.concurrent.Executors
 import kotlin.math.abs
+import kotlin.math.max
 
 class MainActivity : AppCompatActivity() {
 
@@ -35,11 +44,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var root: View
     private lateinit var home: View
     private lateinit var drawer: View
-    private lateinit var homeGrid: RecyclerView
+    private lateinit var homeGrid: HomeGridView
     private lateinit var dock: RecyclerView
     private lateinit var drawerList: RecyclerView
     private lateinit var search: EditText
-    private lateinit var homeAdapter: AppAdapter
     private lateinit var dockAdapter: AppAdapter
     private lateinit var drawerAdapter: AppAdapter
 
@@ -64,6 +72,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setupWindow()
         setContentView(R.layout.activity_main)
         prefs = Prefs(this)
         root = findViewById(R.id.root)
@@ -74,33 +83,42 @@ class MainActivity : AppCompatActivity() {
         drawerList = findViewById(R.id.drawerList)
         search = findViewById(R.id.search)
 
-        homeAdapter = AppAdapter(true, ::launch, ::showAppMenu)
-        dockAdapter = AppAdapter(true, ::launch, ::showAppMenu)
-        drawerAdapter = AppAdapter(false, ::launch, ::showAppMenu)
+        val menuFromList: (AppInfo, View) -> Unit = { a, v -> showAppMenu(a, v, false) }
+        dockAdapter = AppAdapter(prefs, { 4 }, true, ::launch, menuFromList)
+        drawerAdapter = AppAdapter(prefs, { prefs.columns }, false, ::launch, menuFromList)
 
-        homeGrid.layoutManager = object : GridLayoutManager(this, prefs.columns) {
-            override fun canScrollVertically() = false
-        }
         dock.layoutManager = object : GridLayoutManager(this, 4) {
             override fun canScrollVertically() = false
         }
         drawerList.layoutManager = GridLayoutManager(this, prefs.columns)
-        homeGrid.adapter = homeAdapter
         dock.adapter = dockAdapter
         drawerList.adapter = drawerAdapter
-        homeGrid.itemAnimator = null
         drawerList.itemAnimator = null
 
-        search.doAfterTextChanged { applyFilter(it?.toString().orEmpty()) }
+        homeGrid.onAppClick = { app, v -> launch(app, v) }
+        homeGrid.onAppMenu = { app, v -> showAppMenu(app, v, true) }
+        homeGrid.onEmptyLongPress = { if (!drawerOpen) showHomeMenu() }
+        homeGrid.onChanged = { items -> prefs.setHomeLayout(encode(items)) }
 
-        // Long-press on empty home space -> Settings
-        val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onLongPress(e: MotionEvent) {
-                if (!drawerOpen && homeGrid.findChildViewUnder(e.x, e.y) == null) showHomeMenu()
-            }
-        })
-        @Suppress("ClickableViewAccessibility")
-        homeGrid.setOnTouchListener { _, e -> detector.onTouchEvent(e); false }
+        // Full screen: draw behind the status + navigation bars and pad content instead.
+        val sidePad = (8 * resources.displayMetrics.density).toInt()
+        val listBottom = (12 * resources.displayMetrics.density).toInt()
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            home.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            drawer.setPadding(bars.left, bars.top, bars.right, 0)
+            drawerList.updatePadding(
+                left = sidePad,
+                right = sidePad,
+                bottom = max(bars.bottom, ime.bottom) + listBottom
+            )
+            insets
+        }
+
+        search.doAfterTextChanged { applyFilter(it?.toString().orEmpty()) }
 
         registerReceiver(pkgReceiver, IntentFilter().apply {
             addAction(Intent.ACTION_PACKAGE_ADDED)
@@ -108,6 +126,29 @@ class MainActivity : AppCompatActivity() {
             addDataScheme("package")
         })
         reload()
+    }
+
+    private fun setupWindow() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (Build.VERSION.SDK_INT >= 28) {
+            val lp = window.attributes
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            window.attributes = lp
+        }
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.isNavigationBarContrastEnforced = false
+            window.isStatusBarContrastEnforced = false
+        }
+    }
+
+    /** Dark status/nav icons only when the light drawer is on screen. */
+    private fun updateBars(drawerShown: Boolean) {
+        val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        val c = WindowInsetsControllerCompat(window, root)
+        val light = drawerShown && !night
+        c.isAppearanceLightStatusBars = light
+        c.isAppearanceLightNavigationBars = light
     }
 
     override fun onDestroy() {
@@ -118,7 +159,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (allApps.isNotEmpty()) bind() // pick up column changes from Settings
+        updateBars(drawerOpen)
+        if (allApps.isNotEmpty()) bind() // pick up changes from Settings
         if (drawerAnim?.isRunning != true) {
             val s = if (drawerOpen) 0.94f else 1f
             val a = if (drawerOpen) 0.4f else 1f
@@ -147,6 +189,7 @@ class MainActivity : AppCompatActivity() {
             val dockList = AppRepository.pickDock(ctx, apps)
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
+                IconStyle.clear()
                 allApps = apps
                 dockApps = dockList
                 bind()
@@ -156,17 +199,44 @@ class MainActivity : AppCompatActivity() {
 
     private fun bind() {
         val cols = prefs.columns
-        (homeGrid.layoutManager as GridLayoutManager).spanCount = cols
         (drawerList.layoutManager as GridLayoutManager).spanCount = cols
         dockAdapter.submit(dockApps)
-        val dockPkgs = dockApps.map { it.packageName }.toSet()
-        homeAdapter.submit(allApps.filter { it.packageName !in dockPkgs }.take(cols * 5))
+        homeGrid.configure(cols, prefs.scale, prefs.shape)
+        homeGrid.setItems(homeItems(cols))
         applyFilter(search.text.toString())
     }
 
     private fun applyFilter(q: String) {
         val t = q.trim()
         drawerAdapter.submit(if (t.isEmpty()) allApps else allApps.filter { it.label.contains(t, true) })
+    }
+
+    // ---------- Home layout (saved as "component,col,row|component,col,row") ----------
+
+    private fun homeItems(cols: Int): List<HomeItem> {
+        val saved = prefs.getHomeLayout()
+        if (saved != null) return decode(saved)
+        val dockPkgs = dockApps.map { it.packageName }.toSet()
+        val first = allApps.filter { it.packageName !in dockPkgs }.take(cols * 5)
+        return first.mapIndexed { i, a -> HomeItem(a, i % cols, i / cols) }
+    }
+
+    private fun encode(items: List<HomeItem>): String =
+        items.joinToString("|") { "${it.app.component.flattenToString()},${it.col},${it.row}" }
+
+    private fun decode(s: String): List<HomeItem> {
+        val out = ArrayList<HomeItem>()
+        if (s.isEmpty()) return out
+        for (part in s.split("|")) {
+            val f = part.split(",")
+            if (f.size != 3) continue
+            val comp = ComponentName.unflattenFromString(f[0]) ?: continue
+            val app = allApps.firstOrNull { it.component == comp } ?: continue
+            val c = f[1].toIntOrNull() ?: continue
+            val r = f[2].toIntOrNull() ?: continue
+            out.add(HomeItem(app, c, r))
+        }
+        return out
     }
 
     // ---------- Launch ----------
@@ -209,23 +279,38 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Menus ----------
 
-    private fun showAppMenu(app: AppInfo, anchor: View) {
+    private fun showAppMenu(app: AppInfo, anchor: View, onHome: Boolean) {
         PopupMenu(this, anchor).apply {
             menu.add(0, 1, 0, R.string.app_info)
             menu.add(0, 2, 1, R.string.uninstall)
-            setOnMenuItemClickListener {
-                val uri = Uri.fromParts("package", app.packageName, null)
-                try {
-                    startActivity(
-                        if (it.itemId == 1) Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, uri)
-                        else Intent(Intent.ACTION_DELETE, uri)
-                    )
-                } catch (e: Exception) {
-                    Toast.makeText(this@MainActivity, "Not available", Toast.LENGTH_SHORT).show()
+            menu.add(0, 3, 2, if (onHome) "Remove from home" else "Add to home")
+            setOnMenuItemClickListener { item ->
+                if (item.itemId == 3) {
+                    if (onHome) homeGrid.removeApp(app) else addToHome(app)
+                } else {
+                    val uri = Uri.fromParts("package", app.packageName, null)
+                    try {
+                        startActivity(
+                            if (item.itemId == 1) Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, uri)
+                            else Intent(Intent.ACTION_DELETE, uri)
+                        )
+                    } catch (e: Exception) {
+                        Toast.makeText(this@MainActivity, "Not available", Toast.LENGTH_SHORT).show()
+                    }
                 }
                 true
             }
             show()
+        }
+    }
+
+    private fun addToHome(app: AppInfo) {
+        if (homeGrid.contains(app)) {
+            Toast.makeText(this, "Already on the home screen", Toast.LENGTH_SHORT).show()
+        } else if (homeGrid.addApp(app)) {
+            if (drawerOpen) animateDrawer(false)
+        } else {
+            Toast.makeText(this, "Home screen is full", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -243,6 +328,15 @@ class MainActivity : AppCompatActivity() {
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         val a = ev.actionMasked
+
+        // While an icon is being moved on the home screen, never start the drawer swipe.
+        if (homeGrid.isDragging) {
+            if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                tracking = false; vt?.recycle(); vt = null
+            }
+            return super.dispatchTouchEvent(ev)
+        }
+
         if (a == MotionEvent.ACTION_DOWN) {
             vt?.recycle(); vt = VelocityTracker.obtain()
             downX = ev.x; downY = ev.y
@@ -329,6 +423,7 @@ class MainActivity : AppCompatActivity() {
     private fun animateDrawer(open: Boolean) {
         drawerAnim?.cancel()
         drawerOpen = open
+        updateBars(open)
         val h = root.height.toFloat()
         if (drawer.visibility != View.VISIBLE) {
             drawer.visibility = View.VISIBLE
