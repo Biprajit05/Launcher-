@@ -23,22 +23,21 @@
 
         <TextView
             android:id="@+id/homeSearch"
-            android:layout_width="match_parent"
-            android:layout_height="46dp"
-            android:layout_marginStart="20dp"
-            android:layout_marginEnd="20dp"
+            android:layout_width="wrap_content"
+            android:layout_height="34dp"
+            android:layout_gravity="center_horizontal"
             android:layout_marginBottom="12dp"
             android:background="@drawable/home_search_bg"
             android:clickable="true"
             android:drawableStart="@drawable/ic_search"
-            android:drawablePadding="10dp"
+            android:drawablePadding="6dp"
             android:focusable="true"
             android:gravity="center_vertical"
-            android:paddingStart="16dp"
+            android:paddingStart="14dp"
             android:paddingEnd="16dp"
             android:text="@string/home_search_hint"
             android:textColor="@color/home_search_text"
-            android:textSize="15sp" />
+            android:textSize="13sp" />
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/dock"
