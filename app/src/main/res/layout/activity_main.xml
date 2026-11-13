@@ -58,29 +58,59 @@
         android:orientation="vertical"
         android:visibility="invisible">
 
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/drawerList"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp" />
+
+            <com.example.launcher.AlphabetRail
+                android:id="@+id/rail"
+                android:layout_width="22dp"
+                android:layout_height="match_parent"
+                android:layout_gravity="end"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="8dp"
+                android:layout_marginEnd="2dp" />
+
+            <TextView
+                android:id="@+id/railBubble"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:layout_gravity="end"
+                android:layout_marginEnd="40dp"
+                android:background="@drawable/rail_bubble_bg"
+                android:gravity="center"
+                android:textColor="@color/label"
+                android:textSize="26sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+        </FrameLayout>
+
         <EditText
             android:id="@+id/search"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:layout_margin="12dp"
+            android:layout_height="46dp"
+            android:layout_marginStart="16dp"
+            android:layout_marginTop="6dp"
+            android:layout_marginEnd="16dp"
+            android:layout_marginBottom="10dp"
             android:background="@drawable/search_bg"
             android:hint="@string/search_hint"
             android:imeOptions="actionSearch"
             android:importantForAutofill="no"
             android:inputType="text"
             android:maxLines="1"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
+            android:paddingStart="18dp"
+            android:paddingEnd="18dp"
             android:textColor="@color/label"
             android:textColorHint="@color/hint" />
-
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/drawerList"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:clipToPadding="false"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp" />
     </LinearLayout>
 </FrameLayout>
