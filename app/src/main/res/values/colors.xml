@@ -4,5 +4,8 @@
     <color name="drawer_bg">#FFF5F5F7</color>
     <color name="search_bg">#FFE3E3E8</color>
     <color name="dock_bg">#66FFFFFF</color>
+    <color name="home_search_bg">#80FFFFFF</color>
+    <color name="home_search_text">#FF3A3A3C</color>
+    <color name="dock_highlight">#66FFFFFF</color>
     <color name="ic_bg">#FF3B6FE0</color>
 </resources>
