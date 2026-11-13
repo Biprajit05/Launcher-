@@ -48,6 +48,14 @@
         <SeekBar android:id="@+id/sizeBar" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:layout_marginTop="8dp" android:max="80" />
 
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" android:text="Dock" android:textSize="16sp" android:textStyle="bold" />
+        <androidx.appcompat.widget.SwitchCompat android:id="@+id/dockSwitch"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:text="Show dock" />
+        <Button android:id="@+id/resetDock" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:text="Reset dock apps" />
+
         <Button android:id="@+id/resetHome" android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:layout_marginTop="24dp" android:text="Reset home screen layout" />
     </LinearLayout>
