@@ -14,6 +14,7 @@ class AppAdapter(
     private val prefs: Prefs,
     private val columns: () -> Int,
     private val onWallpaper: Boolean,
+    private val showLabels: Boolean,
     private val onClick: (AppInfo, View) -> Unit,
     private val onLongClick: (AppInfo, View) -> Unit
 ) : RecyclerView.Adapter<AppAdapter.VH>() {
@@ -35,6 +36,7 @@ class AppAdapter(
                 label.setTextColor(Color.WHITE)
                 label.setShadowLayer(4f, 0f, 1f, Color.BLACK)
             }
+            if (!showLabels) label.visibility = View.GONE
             // Press effect: 0.88 on down, 1.0 on release
             v.setOnTouchListener { view, e ->
                 when (e.actionMasked) {
@@ -57,6 +59,9 @@ class AppAdapter(
 
     override fun onBindViewHolder(holder: VH, position: Int) {
         val app = items[position]
+        holder.itemView.animate().cancel()
+        holder.itemView.scaleX = 1f
+        holder.itemView.scaleY = 1f
         IconStyle.bindIcon(holder.icon, holder.label, app, prefs.shape, prefs.scale, columns())
     }
 

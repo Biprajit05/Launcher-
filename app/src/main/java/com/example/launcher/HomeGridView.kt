@@ -35,6 +35,15 @@ class HomeGridView @JvmOverloads constructor(
     var onEmptyLongPress: (() -> Unit)? = null
     var onChanged: ((List<HomeItem>) -> Unit)? = null
 
+    /** Finger moved while an icon is being dragged (screen coordinates). */
+    var onDragMove: ((Float, Float) -> Unit)? = null
+
+    /** Icon dropped. Return true if something outside the grid (the dock) took it. */
+    var onDropOutside: ((AppInfo, Float, Float) -> Boolean)? = null
+
+    /** Drag finished (dropped or cancelled). */
+    var onDragEnd: (() -> Unit)? = null
+
     private val entries = ArrayList<Entry>()
     private var cols = 4
     private var rows = 1
@@ -53,6 +62,8 @@ class HomeGridView @JvmOverloads constructor(
     private var longFired = false
     private var grabDX = 0f
     private var grabDY = 0f
+    private var rawX = 0f
+    private var rawY = 0f
     private val longPress = Runnable { onLongPressFired() }
 
     val isDragging: Boolean get() = dragEntry != null
@@ -190,6 +201,8 @@ class HomeGridView @JvmOverloads constructor(
     // ---------- Touch ----------
 
     override fun onTouchEvent(ev: MotionEvent): Boolean {
+        rawX = ev.rawX
+        rawY = ev.rawY
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = ev.x
@@ -260,6 +273,10 @@ class HomeGridView @JvmOverloads constructor(
         dragFar = false
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         e.view.bringToFront()
+        // Let the dragged icon draw outside the grid and above the dock / search bar.
+        clipChildren = false
+        (parent as? ViewGroup)?.clipChildren = false
+        translationZ = 24f
         e.view.animate().scaleX(1.15f).scaleY(1.15f).setDuration(120L).start()
         grabDX = downX - e.view.left
         grabDY = downY - e.view.top
@@ -269,16 +286,25 @@ class HomeGridView @JvmOverloads constructor(
         if (!dragFar && (abs(x - downX) > slop || abs(y - downY) > slop)) dragFar = true
         e.view.translationX = (x - grabDX) - e.view.left
         e.view.translationY = (y - grabDY) - e.view.top
+        onDragMove?.invoke(rawX, rawY)
     }
 
     private fun finishDrag(e: Entry, drop: Boolean) {
         dragEntry = null
         val view = e.view
+        translationZ = 0f
+        onDragEnd?.invoke()
 
         if (!drop || !dragFar) {
             // Not moved (or cancelled): go back; a plain long-press shows the menu.
             view.animate().translationX(0f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(120L).start()
             if (drop) onAppMenu?.invoke(e.item.app, view.findViewById<View>(R.id.icon))
+            return
+        }
+
+        // Dropped on the dock? Then the dock took it: the icon just glides back home.
+        if (onDropOutside?.invoke(e.item.app, rawX, rawY) == true) {
+            view.animate().translationX(0f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(160L).start()
             return
         }
 

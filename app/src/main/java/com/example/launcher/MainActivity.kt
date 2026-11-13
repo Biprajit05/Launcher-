@@ -13,8 +13,10 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
@@ -23,6 +25,8 @@ import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.PopupMenu
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -34,8 +38,10 @@ import androidx.core.view.updatePadding
 import androidx.core.widget.doAfterTextChanged
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import java.util.Collections
 import java.util.concurrent.Executors
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 
 class MainActivity : AppCompatActivity() {
@@ -48,11 +54,26 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dock: RecyclerView
     private lateinit var drawerList: RecyclerView
     private lateinit var search: EditText
+    private lateinit var homeSearch: View
     private lateinit var dockAdapter: AppAdapter
     private lateinit var drawerAdapter: AppAdapter
 
     private var allApps: List<AppInfo> = emptyList()
     private var dockApps: List<AppInfo> = emptyList()
+
+    // Drag from the app drawer to the dock
+    private var pendingApp: AppInfo? = null
+    private var pendingAnchor: View? = null
+    private var pressX = 0f
+    private var pressY = 0f
+    private var lastX = 0f
+    private var lastY = 0f
+    private var lastRawX = 0f
+    private var lastRawY = 0f
+    private var extDragging = false
+    private var overlay: ImageView? = null
+    private var hoverSlot = -1
+    private var focusSearchOnOpen = false
 
     private var drawerOpen = false
     private var drawerAnim: ValueAnimator? = null
@@ -82,10 +103,16 @@ class MainActivity : AppCompatActivity() {
         dock = findViewById(R.id.dock)
         drawerList = findViewById(R.id.drawerList)
         search = findViewById(R.id.search)
+        homeSearch = findViewById(R.id.homeSearch)
+        homeSearch.setOnClickListener { openDrawerForSearch() }
 
         val menuFromList: (AppInfo, View) -> Unit = { a, v -> showAppMenu(a, v, false) }
-        dockAdapter = AppAdapter(prefs, { 4 }, true, ::launch, menuFromList)
-        drawerAdapter = AppAdapter(prefs, { prefs.columns }, false, ::launch, menuFromList)
+        // Drawer: long-press then drag = put on the dock; long-press and release = menu.
+        val drawerLongPress: (AppInfo, View) -> Unit = { a, v ->
+            if (prefs.dockEnabled) beginDrawerPress(a, v) else showAppMenu(a, v, false)
+        }
+        dockAdapter = AppAdapter(prefs, { 4 }, true, false, ::launch, menuFromList)
+        drawerAdapter = AppAdapter(prefs, { prefs.columns }, false, true, ::launch, drawerLongPress)
 
         dock.layoutManager = object : GridLayoutManager(this, 4) {
             override fun canScrollVertically() = false
@@ -99,6 +126,12 @@ class MainActivity : AppCompatActivity() {
         homeGrid.onAppMenu = { app, v -> showAppMenu(app, v, true) }
         homeGrid.onEmptyLongPress = { if (!drawerOpen) showHomeMenu() }
         homeGrid.onChanged = { items -> prefs.setHomeLayout(encode(items)) }
+        homeGrid.onDragMove = { x, y -> setHover(dockSlotAt(x, y)) }
+        homeGrid.onDragEnd = { setHover(-1) }
+        homeGrid.onDropOutside = { app, x, y ->
+            val slot = dockSlotAt(x, y)
+            if (slot >= 0) { assignToDock(app, slot); true } else false
+        }
 
         // Full screen: draw behind the status + navigation bars and pad content instead.
         val sidePad = (8 * resources.displayMetrics.density).toInt()
@@ -160,7 +193,10 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateBars(drawerOpen)
-        if (allApps.isNotEmpty()) bind() // pick up changes from Settings
+        if (allApps.isNotEmpty()) {
+            dockApps = resolveDock(applicationContext, allApps) // pick up changes from Settings
+            bind()
+        }
         if (drawerAnim?.isRunning != true) {
             val s = if (drawerOpen) 0.94f else 1f
             val a = if (drawerOpen) 0.4f else 1f
@@ -186,7 +222,7 @@ class MainActivity : AppCompatActivity() {
         val ctx = applicationContext
         executor.execute {
             val apps = AppRepository.loadApps(ctx)
-            val dockList = AppRepository.pickDock(ctx, apps)
+            val dockList = resolveDock(ctx, apps)
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 IconStyle.clear()
@@ -197,8 +233,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Saved dock (if any), padded with the default apps so it always has 4. */
+    private fun resolveDock(ctx: Context, apps: List<AppInfo>): List<AppInfo> {
+        val defaults = AppRepository.pickDock(ctx, apps)
+        val saved = prefs.getDock() ?: return defaults
+        val out = ArrayList<AppInfo>()
+        for (part in saved.split("|")) {
+            val comp = ComponentName.unflattenFromString(part) ?: continue
+            val app = apps.firstOrNull { it.component == comp } ?: continue
+            if (out.none { it.component == comp }) out.add(app)
+        }
+        if (out.isEmpty()) return defaults
+        for (a in defaults) {
+            if (out.size >= 4) break
+            if (out.none { it.component == a.component }) out.add(a)
+        }
+        return out.take(4)
+    }
+
     private fun bind() {
         val cols = prefs.columns
+        dock.visibility = if (prefs.dockEnabled) View.VISIBLE else View.GONE
         (drawerList.layoutManager as GridLayoutManager).spanCount = cols
         dockAdapter.submit(dockApps)
         homeGrid.configure(cols, prefs.scale, prefs.shape)
@@ -216,7 +271,7 @@ class MainActivity : AppCompatActivity() {
     private fun homeItems(cols: Int): List<HomeItem> {
         val saved = prefs.getHomeLayout()
         if (saved != null) return decode(saved)
-        val dockPkgs = dockApps.map { it.packageName }.toSet()
+        val dockPkgs = if (prefs.dockEnabled) dockApps.map { it.packageName }.toSet() else emptySet()
         val first = allApps.filter { it.packageName !in dockPkgs }.take(cols * 5)
         return first.mapIndexed { i, a -> HomeItem(a, i % cols, i / cols) }
     }
@@ -324,10 +379,128 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- Dock: drag & drop ----------
+
+    private fun beginDrawerPress(app: AppInfo, anchor: View) {
+        pendingApp = app
+        pendingAnchor = anchor
+        pressX = lastRawX
+        pressY = lastRawY
+        // Stop the list / icon from scrolling or clicking while we own the touch.
+        val c = MotionEvent.obtain(SystemClock.uptimeMillis(), SystemClock.uptimeMillis(),
+            MotionEvent.ACTION_CANCEL, lastX, lastY, 0)
+        super.dispatchTouchEvent(c)
+        c.recycle()
+        anchor.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    }
+
+    private fun startExtDrag(app: AppInfo) {
+        extDragging = true
+        val iconView = pendingAnchor?.findViewById<ImageView>(R.id.icon)
+        val size = (iconView?.width ?: 0).takeIf { it > 0 } ?: (52 * resources.displayMetrics.density).toInt()
+        val img = ImageView(this)
+        img.setImageDrawable(iconView?.drawable?.constantState?.newDrawable() ?: app.icon)
+        img.scaleType = ImageView.ScaleType.FIT_XY
+        img.layoutParams = FrameLayout.LayoutParams(size, size)
+        img.scaleX = 1.15f
+        img.scaleY = 1.15f
+        (root as FrameLayout).addView(img)
+        overlay = img
+        moveExtDrag(lastRawX, lastRawY)
+        if (drawerOpen) animateDrawer(false) // reveal the home screen + dock
+        hideKeyboard()
+    }
+
+    private fun moveExtDrag(rawX: Float, rawY: Float) {
+        val img = overlay ?: return
+        val loc = IntArray(2)
+        root.getLocationOnScreen(loc)
+        img.translationX = rawX - loc[0] - img.layoutParams.width / 2f
+        img.translationY = rawY - loc[1] - img.layoutParams.height / 2f
+        setHover(dockSlotAt(rawX, rawY))
+    }
+
+    private fun endExtDrag() {
+        overlay?.let { (root as FrameLayout).removeView(it) }
+        overlay = null
+        extDragging = false
+        setHover(-1)
+    }
+
+    /** Which dock slot (0..3) is under this screen point, or -1. */
+    private fun dockSlotAt(x: Float, y: Float): Int {
+        if (!prefs.dockEnabled || dock.visibility != View.VISIBLE || dock.width == 0) return -1
+        val loc = IntArray(2)
+        dock.getLocationOnScreen(loc)
+        val sc = home.scaleX
+        val w = dock.width * sc
+        val h = dock.height * sc
+        val pad = 24 * resources.displayMetrics.density
+        if (x < loc[0] || x > loc[0] + w || y < loc[1] - pad || y > loc[1] + h + pad) return -1
+        return ((x - loc[0]) / w * 4).toInt().coerceIn(0, 3)
+    }
+
+    private fun setHover(slot: Int) {
+        if (slot == hoverSlot) return
+        dock.findViewHolderForAdapterPosition(hoverSlot)?.itemView?.animate()
+            ?.scaleX(1f)?.scaleY(1f)?.setDuration(120)?.start()
+        hoverSlot = slot
+        dock.findViewHolderForAdapterPosition(slot)?.itemView?.animate()
+            ?.scaleX(1.25f)?.scaleY(1.25f)?.setDuration(120)?.start()
+    }
+
+    private fun assignToDock(app: AppInfo, slot: Int) {
+        val list = dockApps.toMutableList()
+        val existing = list.indexOfFirst { it.component == app.component }
+        if (slot >= list.size) {
+            if (existing >= 0) list.removeAt(existing)
+            list.add(app)
+        } else if (existing >= 0) {
+            Collections.swap(list, existing, slot)
+        } else {
+            list[slot] = app
+        }
+        dockApps = list.take(4)
+        prefs.setDock(dockApps.joinToString("|") { it.component.flattenToString() })
+        dockAdapter.submit(dockApps)
+    }
+
+    private fun openDrawerForSearch() {
+        if (drawerOpen) return
+        focusSearchOnOpen = true
+        animateDrawer(true)
+    }
+
     // ---------- Drawer (drag + animate) ----------
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         val a = ev.actionMasked
+        lastX = ev.x; lastY = ev.y
+        lastRawX = ev.rawX; lastRawY = ev.rawY
+
+        // A drawer icon was long-pressed: drag it to the dock, or release for the menu.
+        val pa = pendingApp
+        if (pa != null) {
+            when (a) {
+                MotionEvent.ACTION_MOVE -> {
+                    if (!extDragging && hypot(ev.rawX - pressX, ev.rawY - pressY) > slop * 1.5f) startExtDrag(pa)
+                    if (extDragging) moveExtDrag(ev.rawX, ev.rawY)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    val anchor = pendingAnchor
+                    if (extDragging) {
+                        val slot = if (a == MotionEvent.ACTION_UP) dockSlotAt(ev.rawX, ev.rawY) else -1
+                        if (slot >= 0) assignToDock(pa, slot)
+                        endExtDrag()
+                    } else if (a == MotionEvent.ACTION_UP && anchor != null) {
+                        showAppMenu(pa, anchor, false)
+                    }
+                    pendingApp = null; pendingAnchor = null
+                    tracking = false; vt?.recycle(); vt = null
+                }
+            }
+            return true
+        }
 
         // While an icon is being moved on the home screen, never start the drawer swipe.
         if (homeGrid.isDragging) {
@@ -448,6 +621,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun settle(open: Boolean) {
         layers(false)
+        if (!open) focusSearchOnOpen = false
+        if (open && focusSearchOnOpen) {
+            focusSearchOnOpen = false
+            search.requestFocus()
+            getSystemService(InputMethodManager::class.java).showSoftInput(search, InputMethodManager.SHOW_IMPLICIT)
+        }
         if (!open) {
             drawer.visibility = View.INVISIBLE
             search.setText("")

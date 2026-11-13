@@ -7,6 +7,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -46,6 +47,15 @@ class SettingsActivity : AppCompatActivity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
+
+        findViewById<SwitchCompat>(R.id.dockSwitch).apply {
+            isChecked = p.dockEnabled
+            setOnCheckedChangeListener { _, checked -> p.dockEnabled = checked }
+        }
+        findViewById<Button>(R.id.resetDock).setOnClickListener {
+            p.setDock(null)
+            Toast.makeText(this, "Dock reset", Toast.LENGTH_SHORT).show()
+        }
 
         findViewById<Button>(R.id.resetHome).setOnClickListener {
             p.setHomeLayout(null)

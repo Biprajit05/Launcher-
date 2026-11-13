@@ -35,6 +35,20 @@ class Prefs(context: Context) {
     /** 1.0 at "Normal" */
     val factor: Float get() = speed / 450f
 
+    /** Show the dock at the bottom of the home screen. */
+    var dockEnabled: Boolean
+        get() = sp.getBoolean("dock_enabled", true)
+        set(v) = sp.edit().putBoolean("dock_enabled", v).apply()
+
+    /** Saved dock apps as "component|component|...". null = default dock. */
+    fun getDock(): String? = sp.getString("dock_apps", null)
+
+    fun setDock(value: String?) {
+        val e = sp.edit()
+        if (value == null) e.remove("dock_apps") else e.putString("dock_apps", value)
+        e.apply()
+    }
+
     /** Saved home screen layout. null = never customised (use the default). */
     fun getHomeLayout(): String? = sp.getString("home_layout", null)
 
