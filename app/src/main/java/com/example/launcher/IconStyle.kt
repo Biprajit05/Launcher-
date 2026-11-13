@@ -38,10 +38,19 @@ object IconStyle {
      * scale: 1.0 = normal size
      * columns: used so big icons never overlap their neighbours
      */
-    fun bindIcon(icon: ImageView, label: TextView, app: AppInfo, shape: Int, scale: Float, columns: Int) {
+    fun bindIcon(
+        icon: ImageView,
+        label: TextView,
+        app: AppInfo,
+        shape: Int,
+        scale: Float,
+        columns: Int,
+        labelScale: Float = 1f,
+        maxIconPx: Int = Int.MAX_VALUE
+    ) {
         val dm = icon.resources.displayMetrics
         val d = dm.density
-        val cap = dm.widthPixels / columns - (16f * d).toInt()
+        val cap = min(dm.widthPixels / columns - (16f * d).toInt(), maxIconPx)
         val want = (52f * d * scale).toInt()
         val px = min(want, cap).coerceAtLeast((24f * d).toInt())
         val lp = icon.layoutParams
@@ -52,7 +61,7 @@ object IconStyle {
         }
         icon.setImageDrawable(drawableFor(icon.context, app, shape))
         label.text = app.label
-        label.textSize = 12f * scale.coerceIn(0.8f, 1.25f)
+        label.textSize = 12f * labelScale
     }
 
     private fun drawableFor(ctx: Context, app: AppInfo, shape: Int): Drawable {

@@ -48,6 +48,23 @@ class SettingsActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
 
+        // Label size 50%..150% (bar 0..100), home screen + app drawer
+        val labelText = findViewById<TextView>(R.id.labelSizeLabel)
+        val labelBar = findViewById<SeekBar>(R.id.labelSizeBar)
+        labelBar.progress = (p.labelPercent - 50).coerceIn(0, 100)
+        labelText.text = "Label size: ${p.labelPercent}%"
+        labelBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val percent = 50 + progress
+                p.labelPercent = percent
+                labelText.text = "Label size: $percent%"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        bind(R.id.homeGridGroup, mapOf(R.id.grid4x6 to 0, R.id.grid4x7 to 1, R.id.grid5x6 to 2), p.homeGrid) { p.homeGrid = it }
+
         findViewById<SwitchCompat>(R.id.dockSwitch).apply {
             isChecked = p.dockEnabled
             setOnCheckedChangeListener { _, checked -> p.dockEnabled = checked }

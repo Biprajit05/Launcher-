@@ -62,7 +62,7 @@ class AppAdapter(
         holder.itemView.animate().cancel()
         holder.itemView.scaleX = 1f
         holder.itemView.scaleY = 1f
-        IconStyle.bindIcon(holder.icon, holder.label, app, prefs.shape, prefs.scale, columns())
+        IconStyle.bindIcon(holder.icon, holder.label, app, prefs.shape, prefs.scale, columns(), prefs.labelScale)
     }
 
     override fun getItemCount() = items.size

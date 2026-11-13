@@ -209,7 +209,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (drawerAnim?.isRunning != true) {
             val s = if (drawerOpen) 0.94f else 1f
-            val a = if (drawerOpen) 0.4f else 1f
+            val a = if (drawerOpen) 0f else 1f
             animateLayer(home, s, a, prefs.speed.toLong())
             animateLayer(drawer, 1f, 1f, prefs.speed.toLong())
         }
@@ -266,8 +266,8 @@ class MainActivity : AppCompatActivity() {
         dock.visibility = if (prefs.dockEnabled) View.VISIBLE else View.GONE
         (drawerList.layoutManager as GridLayoutManager).spanCount = cols
         dockAdapter.submit(dockApps)
-        homeGrid.configure(cols, prefs.scale, prefs.shape)
-        homeGrid.setItems(homeItems(cols))
+        homeGrid.configure(prefs.homeCols, prefs.homeRows, prefs.scale, prefs.shape, prefs.labelScale)
+        homeGrid.setItems(homeItems(prefs.homeCols, prefs.homeRows))
         applyFilter(search.text.toString())
     }
 
@@ -280,11 +280,11 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Home layout (saved as "component,col,row|component,col,row") ----------
 
-    private fun homeItems(cols: Int): List<HomeItem> {
+    private fun homeItems(cols: Int, rows: Int): List<HomeItem> {
         val saved = prefs.getHomeLayout()
         if (saved != null) return decode(saved)
         val dockPkgs = if (prefs.dockEnabled) dockApps.map { it.packageName }.toSet() else emptySet()
-        val first = allApps.filter { it.packageName !in dockPkgs }.take(cols * 5)
+        val first = allApps.filter { it.packageName !in dockPkgs }.take(cols * minOf(rows, 5))
         return first.mapIndexed { i, a -> HomeItem(a, i % cols, i / cols) }
     }
 
@@ -600,9 +600,11 @@ class MainActivity : AppCompatActivity() {
     private fun startDrag(ev: MotionEvent) {
         drawerAnim?.cancel()
         home.animate().cancel()
+        drawer.animate().cancel()
         if (drawer.visibility != View.VISIBLE) {
+            // Appears right away, a bit below the middle of the screen, fully transparent.
             drawer.visibility = View.VISIBLE
-            drawer.translationY = root.height.toFloat()
+            setTy(closedTy())
         }
         baseTy = drawer.translationY
         dragStartY = ev.y
@@ -620,24 +622,30 @@ class MainActivity : AppCompatActivity() {
         val vy = vt?.yVelocity ?: 0f
         vt?.recycle(); vt = null
         tracking = false; dragging = false
-        val h = root.height.toFloat()
         val open = when {
             vy < -250f -> true
             vy > 800f -> false
-            else -> drawer.translationY < h * 0.8f
+            else -> drawer.translationY < closedTy() * 0.75f
         }
         animateDrawer(open)
     }
 
-    /** Drawer position and home scale/alpha (1 -> 0.94 / 0.4) are driven from one value. */
+    /** Where the drawer sits when closed: a little below the middle of the screen. */
+    private fun closedTy(): Float = root.height * 0.6f
+
+    /**
+     * Drawer position, drawer opacity and home scale/alpha are all driven from one value.
+     * Closed: drawer at 60% down, alpha 0. Open: drawer at the top, alpha 1, home faded out.
+     */
     private fun setTy(ty: Float) {
-        val h = root.height.toFloat().coerceAtLeast(1f)
-        val t = ty.coerceIn(0f, h)
+        val range = closedTy().coerceAtLeast(1f)
+        val t = ty.coerceIn(0f, range)
         drawer.translationY = t
-        val p = 1f - t / h
+        val p = 1f - t / range
+        drawer.alpha = p
         val s = 1f - 0.06f * p
         home.scaleX = s; home.scaleY = s
-        home.alpha = 1f - 0.6f * p
+        home.alpha = 1f - p
     }
 
     private fun layers(on: Boolean) {
@@ -650,10 +658,11 @@ class MainActivity : AppCompatActivity() {
         drawerAnim?.cancel()
         drawerOpen = open
         updateBars(open)
-        val h = root.height.toFloat()
+        val h = closedTy().coerceAtLeast(1f)
+        drawer.animate().cancel()
         if (drawer.visibility != View.VISIBLE) {
             drawer.visibility = View.VISIBLE
-            drawer.translationY = h
+            setTy(h)
         }
         val from = drawer.translationY
         val to = if (open) 0f else h

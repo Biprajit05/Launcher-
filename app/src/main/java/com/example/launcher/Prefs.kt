@@ -32,6 +32,21 @@ class Prefs(context: Context) {
 
     val scale: Float get() = iconPercent / 100f
 
+    /** App label size in percent, 50..150 (home screen + app drawer). */
+    var labelPercent: Int
+        get() = sp.getInt("label_percent", 100)
+        set(v) = sp.edit().putInt("label_percent", v).apply()
+
+    val labelScale: Float get() = labelPercent / 100f
+
+    /** Home screen grid: 0 = 4x6, 1 = 4x7, 2 = 5x6 (columns x rows). */
+    var homeGrid: Int
+        get() = sp.getInt("home_grid", 0)
+        set(v) = sp.edit().putInt("home_grid", v).apply()
+
+    val homeCols: Int get() = if (homeGrid == 2) 5 else 4
+    val homeRows: Int get() = if (homeGrid == 1) 7 else 6
+
     /** 1.0 at "Normal" */
     val factor: Float get() = speed / 450f
 

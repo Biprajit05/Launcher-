@@ -3,6 +3,7 @@ package com.example.launcher
 import android.content.Context
 import android.graphics.Color
 import android.util.AttributeSet
+import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -46,11 +47,13 @@ class HomeGridView @JvmOverloads constructor(
 
     private val entries = ArrayList<Entry>()
     private var cols = 4
-    private var rows = 1
+    private var rows = 6
     private var cellW = 1
     private var cellH = 1
     private var scale = 1f
+    private var labelScale = 1f
     private var shape = 0
+    private var iconCap = Int.MAX_VALUE
 
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     private var downX = 0f
@@ -70,9 +73,11 @@ class HomeGridView @JvmOverloads constructor(
 
     // ---------- Public API ----------
 
-    fun configure(columns: Int, iconScale: Float, iconShape: Int) {
+    fun configure(columns: Int, rowCount: Int, iconScale: Float, iconShape: Int, labelSize: Float) {
         cols = max(1, columns)
+        rows = max(1, rowCount)
         scale = iconScale
+        labelScale = labelSize
         shape = iconShape
         requestLayout()
     }
@@ -122,13 +127,19 @@ class HomeGridView @JvmOverloads constructor(
 
     private fun makeEntry(m: HomeItem): Entry {
         val v = LayoutInflater.from(context).inflate(R.layout.item_app, this, false)
-        val icon = v.findViewById<ImageView>(R.id.icon)
         val label = v.findViewById<TextView>(R.id.label)
-        IconStyle.bindIcon(icon, label, m.app, shape, scale, cols)
         label.setTextColor(Color.WHITE)
         label.setShadowLayer(4f, 0f, 1f, Color.BLACK)
+        val e = Entry(m, v)
+        bindEntry(e)
         addView(v)
-        return Entry(m, v)
+        return e
+    }
+
+    private fun bindEntry(e: Entry) {
+        val icon = e.view.findViewById<ImageView>(R.id.icon)
+        val label = e.view.findViewById<TextView>(R.id.label)
+        IconStyle.bindIcon(icon, label, e.item.app, shape, scale, cols, labelScale, iconCap)
     }
 
     // ---------- Layout ----------
@@ -139,8 +150,15 @@ class HomeGridView @JvmOverloads constructor(
         setMeasuredDimension(w, h)
         val d = resources.displayMetrics.density
         cellW = max(1, (w - paddingLeft - paddingRight) / cols)
-        cellH = max(1, ((52f * scale + 52f) * d).toInt())
-        rows = max(1, (h - paddingTop - paddingBottom) / cellH)
+        // Rows are fixed by the setting; the cells share the available height.
+        cellH = max(1, (h - paddingTop - paddingBottom) / rows)
+        // Icon must fit the cell: cell padding (16dp) + gap (4dp) + one label line.
+        val labelPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 12f * labelScale, resources.displayMetrics)
+        val cap = (cellH - 20f * d - labelPx * 1.3f).toInt().coerceAtLeast((24f * d).toInt())
+        if (cap != iconCap) {
+            iconCap = cap
+            for (e in entries) bindEntry(e)
+        }
         val cw = MeasureSpec.makeMeasureSpec(cellW, MeasureSpec.EXACTLY)
         val ch = MeasureSpec.makeMeasureSpec(cellH, MeasureSpec.EXACTLY)
         for (e in entries) e.view.measure(cw, ch)
