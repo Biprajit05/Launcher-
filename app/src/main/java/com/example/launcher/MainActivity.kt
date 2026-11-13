@@ -28,6 +28,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.PopupMenu
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -55,6 +56,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var drawerList: RecyclerView
     private lateinit var search: EditText
     private lateinit var homeSearch: View
+    private lateinit var rail: AlphabetRail
+    private lateinit var railBubble: TextView
+    private var shownApps: List<AppInfo> = emptyList()
+    private var railGesture = false
     private lateinit var dockAdapter: AppAdapter
     private lateinit var drawerAdapter: AppAdapter
 
@@ -104,6 +109,9 @@ class MainActivity : AppCompatActivity() {
         drawerList = findViewById(R.id.drawerList)
         search = findViewById(R.id.search)
         homeSearch = findViewById(R.id.homeSearch)
+        rail = findViewById(R.id.rail)
+        railBubble = findViewById(R.id.railBubble)
+        rail.onLetter = { letter, cy, done -> onRailLetter(letter, cy, done) }
         homeSearch.setOnClickListener { openDrawerForSearch() }
 
         val menuFromList: (AppInfo, View) -> Unit = { a, v -> showAppMenu(a, v, false) }
@@ -135,18 +143,20 @@ class MainActivity : AppCompatActivity() {
 
         // Full screen: draw behind the status + navigation bars and pad content instead.
         val sidePad = (8 * resources.displayMetrics.density).toInt()
-        val listBottom = (12 * resources.displayMetrics.density).toInt()
+        val listBottom = (8 * resources.displayMetrics.density).toInt()
+        val railW = (22 * resources.displayMetrics.density).toInt()
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             home.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            drawer.setPadding(bars.left, bars.top, bars.right, 0)
+            drawer.setPadding(bars.left, bars.top, bars.right, max(bars.bottom, ime.bottom))
             drawerList.updatePadding(
                 left = sidePad,
-                right = sidePad,
-                bottom = max(bars.bottom, ime.bottom) + listBottom
+                right = sidePad + railW,
+                top = listBottom,
+                bottom = listBottom
             )
             insets
         }
@@ -263,7 +273,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyFilter(q: String) {
         val t = q.trim()
-        drawerAdapter.submit(if (t.isEmpty()) allApps else allApps.filter { it.label.contains(t, true) })
+        shownApps = if (t.isEmpty()) allApps else allApps.filter { it.label.contains(t, true) }
+        drawerAdapter.submit(shownApps)
+        rail.visibility = if (t.isEmpty()) View.VISIBLE else View.INVISIBLE
     }
 
     // ---------- Home layout (saved as "component,col,row|component,col,row") ----------
@@ -465,6 +477,40 @@ class MainActivity : AppCompatActivity() {
         dockAdapter.submit(dockApps)
     }
 
+    private fun firstLetter(label: String): String {
+        val c = label.trim().firstOrNull()?.uppercaseChar() ?: return "#"
+        return if (c in 'A'..'Z') c.toString() else "#"
+    }
+
+    private fun onRailLetter(letter: String, cy: Float, done: Boolean) {
+        if (done) {
+            railBubble.visibility = View.GONE
+            return
+        }
+        val list = shownApps
+        // "#" = apps not starting with a letter (they sort first); a letter with no apps jumps to the next one.
+        var pos = list.indexOfFirst { firstLetter(it.label) == letter }
+        if (pos < 0 && letter != "#") pos = list.indexOfFirst { firstLetter(it.label) > letter }
+        if (pos < 0 && letter != "#") pos = list.size - 1
+        if (pos >= 0) {
+            drawerList.stopScroll()
+            (drawerList.layoutManager as GridLayoutManager).scrollToPositionWithOffset(pos, 0)
+        }
+        railBubble.text = letter
+        val lp = railBubble.layoutParams as FrameLayout.LayoutParams
+        lp.topMargin = (rail.top + cy - railBubble.layoutParams.height / 2f).toInt().coerceAtLeast(0)
+        railBubble.layoutParams = lp
+        railBubble.visibility = View.VISIBLE
+    }
+
+    private fun hitRail(ev: MotionEvent): Boolean {
+        if (rail.visibility != View.VISIBLE) return false
+        val loc = IntArray(2)
+        rail.getLocationOnScreen(loc)
+        return ev.rawX >= loc[0] - 8 && ev.rawX <= loc[0] + rail.width &&
+            ev.rawY >= loc[1] && ev.rawY <= loc[1] + rail.height
+    }
+
     private fun openDrawerForSearch() {
         if (drawerOpen) return
         focusSearchOnOpen = true
@@ -500,6 +546,13 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             return true
+        }
+
+        // Touches on the A-Z rail belong to the rail only.
+        if (a == MotionEvent.ACTION_DOWN) railGesture = drawerOpen && hitRail(ev)
+        if (railGesture) {
+            if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) railGesture = false
+            return super.dispatchTouchEvent(ev)
         }
 
         // While an icon is being moved on the home screen, never start the drawer swipe.
@@ -569,9 +622,9 @@ class MainActivity : AppCompatActivity() {
         tracking = false; dragging = false
         val h = root.height.toFloat()
         val open = when {
-            vy < -800f -> true
+            vy < -250f -> true
             vy > 800f -> false
-            else -> drawer.translationY < h / 2f
+            else -> drawer.translationY < h * 0.8f
         }
         animateDrawer(open)
     }
@@ -606,7 +659,7 @@ class MainActivity : AppCompatActivity() {
         val to = if (open) 0f else h
         val frac = (abs(to - from) / h).coerceIn(0.3f, 1f)
         drawerAnim = ValueAnimator.ofFloat(from, to).apply {
-            duration = (400 * prefs.factor * frac).toLong()
+            duration = ((if (open) 240 else 300) * prefs.factor * frac).toLong()
             interpolator = DecelerateInterpolator()
             addUpdateListener { setTy(it.animatedValue as Float) }
             addListener(object : AnimatorListenerAdapter() {

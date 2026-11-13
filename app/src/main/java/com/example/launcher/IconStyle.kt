@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.BitmapDrawable
@@ -15,6 +16,8 @@ import android.graphics.drawable.Drawable
 import android.util.LruCache
 import android.widget.ImageView
 import android.widget.TextView
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
 
 /** Applies the chosen icon shape + size to an icon / label pair. */
@@ -83,14 +86,16 @@ object IconStyle {
             drawLegacy(cc, icon, size)
         }
 
+        val trimmed = trimBorder(content)
+
         // Cut the content out with an anti-aliased shape.
         val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val oc = Canvas(out)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         oc.drawPath(shapePath(shape, size.toFloat()), paint)
         paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
-        oc.drawBitmap(content, 0f, 0f, paint)
-        content.recycle()
+        oc.drawBitmap(trimmed, 0f, 0f, paint)
+        trimmed.recycle()
         return out
     }
 
@@ -98,23 +103,82 @@ object IconStyle {
         val probe = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         icon.setBounds(0, 0, size, size)
         icon.draw(Canvas(probe))
-        val m = 3
-        val full = Color.alpha(probe.getPixel(m, m)) > 240 &&
-            Color.alpha(probe.getPixel(size - 1 - m, m)) > 240 &&
-            Color.alpha(probe.getPixel(m, size - 1 - m)) > 240 &&
-            Color.alpha(probe.getPixel(size - 1 - m, size - 1 - m)) > 240
-        if (full) {
-            // Square icon: let it fill the whole shape.
-            c.drawBitmap(probe, 0f, 0f, null)
-        } else {
-            // Icon with its own outline: put it on a white tile.
-            c.drawColor(Color.WHITE)
-            val pad = (size * 0.14f).toInt()
-            icon.setBounds(pad, pad, size - pad, size - pad)
-            icon.draw(c)
+        // Bounding box of the visible (opaque) part of the icon.
+        var l = size; var t = size; var r = -1; var b = -1
+        for (y in 0 until size) for (x in 0 until size) {
+            if (Color.alpha(probe.getPixel(x, y)) > 128) {
+                if (x < l) l = x
+                if (x > r) r = x
+                if (y < t) t = y
+                if (y > b) b = y
+            }
         }
+        if (r < l || b < t) {
+            c.drawBitmap(probe, 0f, 0f, null)
+            probe.recycle()
+            return
+        }
+        // Fill the whole shape with the icon's own edge colour, then draw the
+        // visible part scaled up so it covers the shape (crop, no padding).
+        val edge = probe.getPixel((l + 3).coerceAtMost(r), (t + b) / 2)
+        c.drawColor(if (Color.alpha(edge) > 200) edge else Color.WHITE)
+        val side = min(r - l + 1, b - t + 1)
+        val cx = (l + r) / 2
+        val cy = (t + b) / 2
+        val src = Rect(cx - side / 2, cy - side / 2, cx - side / 2 + side, cy - side / 2 + side)
+        val p = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+        c.drawBitmap(probe, src, Rect(0, 0, size, size), p)
         probe.recycle()
     }
+
+    /**
+     * If the icon is a picture sitting on a plain border (e.g. a white tile with
+     * padding), cut the border off so the picture fills the whole shape.
+     */
+    private fun trimBorder(src: Bitmap): Bitmap {
+        val n = src.width
+        val m = 2
+        val corners = intArrayOf(
+            src.getPixel(m, m), src.getPixel(n - 1 - m, m),
+            src.getPixel(m, n - 1 - m), src.getPixel(n - 1 - m, n - 1 - m)
+        )
+        val bg = corners[0]
+        if (corners.any { Color.alpha(it) < 200 || diff(it, bg) > 10 }) return src
+
+        var l = n; var t = n; var r = -1; var b = -1
+        var content = 0
+        val px = IntArray(n * n)
+        src.getPixels(px, 0, n, 0, 0, n, n)
+        for (y in 0 until n) for (x in 0 until n) {
+            if (diff(px[y * n + x], bg) > 10) {
+                if (x < l) l = x
+                if (x > r) r = x
+                if (y < t) t = y
+                if (y > b) b = y
+            }
+        }
+        if (r < l || b < t) return src
+        val w = r - l + 1
+        val h = b - t + 1
+        // Only zoom when it is a real picture block (not a small / round logo).
+        if (w < n * 0.45f || h < n * 0.45f || (w > n * 0.96f && h > n * 0.96f)) return src
+        for (y in t..b) for (x in l..r) if (diff(px[y * n + x], bg) > 10) content++
+        if (content < 0.88f * w * h) return src
+
+        val side = min(w, h) - 2
+        val cx = (l + r) / 2
+        val cy = (t + b) / 2
+        val crop = Rect(cx - side / 2, cy - side / 2, cx - side / 2 + side, cy - side / 2 + side)
+        val out = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
+        Canvas(out).drawBitmap(src, crop, Rect(0, 0, n, n), Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+        src.recycle()
+        return out
+    }
+
+    private fun diff(a: Int, b: Int): Int = max(
+        abs(Color.red(a) - Color.red(b)),
+        max(abs(Color.green(a) - Color.green(b)), abs(Color.blue(a) - Color.blue(b)))
+    )
 
     private fun shapePath(shape: Int, s: Float): Path {
         val p = Path()
