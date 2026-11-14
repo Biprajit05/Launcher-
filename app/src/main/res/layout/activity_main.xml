@@ -21,28 +21,35 @@
             android:paddingTop="16dp"
             android:paddingEnd="8dp" />
 
-        <com.example.launcher.PageDots
-            android:id="@+id/pageDots"
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="16dp" />
-
-        <TextView
-            android:id="@+id/homeSearch"
-            android:layout_width="wrap_content"
             android:layout_height="34dp"
-            android:layout_gravity="center_horizontal"
             android:layout_marginBottom="12dp"
-            android:background="@drawable/home_search_bg"
-            android:clickable="true"
-            android:drawableStart="@drawable/ic_search"
-            android:drawablePadding="6dp"
-            android:focusable="true"
-            android:gravity="center_vertical"
-            android:paddingStart="14dp"
-            android:paddingEnd="16dp"
-            android:text="@string/home_search_hint"
-            android:textColor="@color/home_search_text"
-            android:textSize="13sp" />
+            android:clipChildren="false">
+
+            <com.example.launcher.PageDots
+                android:id="@+id/pageDots"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0" />
+
+            <TextView
+                android:id="@+id/homeSearch"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:layout_gravity="center_horizontal"
+                android:background="@drawable/home_search_bg"
+                android:clickable="true"
+                android:drawableStart="@drawable/ic_search"
+                android:drawablePadding="6dp"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:paddingStart="14dp"
+                android:paddingEnd="16dp"
+                android:text="@string/home_search_hint"
+                android:textColor="@color/home_search_text"
+                android:textSize="13sp" />
+        </FrameLayout>
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/dock"
