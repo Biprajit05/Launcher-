@@ -44,6 +44,14 @@
             <RadioButton android:id="@+id/shapeTeardrop" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Teardrop" />
         </RadioGroup>
 
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" android:text="Icon pack" android:textSize="16sp" android:textStyle="bold" />
+        <Button android:id="@+id/iconPackBtn" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" android:textAllCaps="false" android:text="Default (system icons)" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Works with ADW / Nova / Apex compatible packs. Long-press any app and choose Edit icon to change a single icon."
+            android:textSize="12sp" />
+
         <TextView android:id="@+id/sizeLabel" android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:layout_marginTop="24dp" android:text="Icon size: 100%" android:textSize="16sp" android:textStyle="bold" />
         <SeekBar android:id="@+id/sizeBar" android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -113,5 +121,7 @@
 
         <Button android:id="@+id/resetHome" android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:layout_marginTop="24dp" android:text="Reset home screen layout" />
+        <Button android:id="@+id/resetCustom" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:textAllCaps="false" android:text="Reset custom icons and names" />
     </LinearLayout>
 </ScrollView>
