@@ -86,6 +86,20 @@ class SettingsActivity : AppCompatActivity() {
             Toast.makeText(this, "Dock reset", Toast.LENGTH_SHORT).show()
         }
 
+        // Icon pack
+        val packBtn = findViewById<Button>(R.id.iconPackBtn)
+        packBtn.text = IconManager.selectedPackLabel(this)
+        packBtn.setOnClickListener {
+            IconDialogs.choosePack(this, true) { pkg ->
+                IconManager.setSelectedPack(this, pkg)
+                packBtn.text = IconManager.selectedPackLabel(this)
+            }
+        }
+        findViewById<Button>(R.id.resetCustom).setOnClickListener {
+            IconManager.resetAll(this)
+            Toast.makeText(this, "Custom icons and names reset", Toast.LENGTH_SHORT).show()
+        }
+
         findViewById<Button>(R.id.resetHome).setOnClickListener {
             p.setHomeLayout(null)
             Toast.makeText(this, "Home screen reset", Toast.LENGTH_SHORT).show()

@@ -66,6 +66,17 @@ object IconStyle {
     }
 
     private fun drawableFor(ctx: Context, app: AppInfo, shape: Int): Drawable {
+        // 1. Image picked from the gallery for this app: centre-cropped and cut to the chosen shape.
+        val picked = IconManager.galleryIcon(ctx, app.component)
+        if (picked != null) {
+            val gkey = "g#" + app.component.flattenToShortString() + "#" + shape
+            val gbmp: Bitmap = cache.get(gkey) ?: renderPicked(ctx, picked, shape).also { cache.put(gkey, it) }
+            return BitmapDrawable(ctx.resources, gbmp)
+        }
+        // 2. Icon pack (or an icon picked from a pack): shown as the pack draws it.
+        val fromPack = IconManager.packIcon(ctx, app)
+        if (fromPack != null) return fromPack
+
         if (shape == 0) return app.icon.constantState?.newDrawable() ?: app.icon
         val key = app.component.flattenToShortString() + "#" + shape
         val cached: Bitmap? = cache.get(key)
@@ -106,6 +117,19 @@ object IconStyle {
         paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
         oc.drawBitmap(trimmed, 0f, 0f, paint)
         trimmed.recycle()
+        return out
+    }
+
+    /** A gallery picture (already a centred square) cut to the icon shape. "Original" uses the rounded square. */
+    private fun renderPicked(ctx: Context, src: Bitmap, shape: Int): Bitmap {
+        val size = (RENDER_DP * ctx.resources.displayMetrics.density).toInt().coerceAtLeast(48)
+        val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val oc = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        oc.drawPath(shapePath(if (shape == 0) 3 else shape, size.toFloat()), paint)
+        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+        paint.isFilterBitmap = true
+        oc.drawBitmap(src, Rect(0, 0, src.width, src.height), Rect(0, 0, size, size), paint)
         return out
     }
 

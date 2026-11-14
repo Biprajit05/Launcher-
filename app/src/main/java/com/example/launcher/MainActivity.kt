@@ -13,6 +13,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.app.WallpaperColors
 import android.app.WallpaperManager
@@ -43,6 +44,8 @@ import android.widget.ImageView
 import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -94,6 +97,11 @@ class MainActivity : AppCompatActivity() {
     private var overlay: ImageView? = null
     private var hoverSlot = -1
     private var focusSearchOnOpen = false
+
+    // Custom icons: gallery picker + change tracking
+    private var iconSig = ""
+    private var pickTarget: AppInfo? = null
+    private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri -> onImagePicked(uri) }
 
     private var drawerOpen = false
     private var drawerAnim: ValueAnimator? = null
@@ -152,6 +160,7 @@ class MainActivity : AppCompatActivity() {
         setupWindow()
         setContentView(R.layout.activity_main)
         prefs = Prefs(this)
+        iconSig = IconManager.signature(applicationContext)
         root = findViewById(R.id.root)
         home = findViewById(R.id.home)
         drawer = findViewById(R.id.drawer)
@@ -287,7 +296,10 @@ class MainActivity : AppCompatActivity() {
             else if (!keyguardLocked()) playUnlock()
             else { ui.removeCallbacks(unlockWatch); ui.postDelayed(unlockWatch, 400) }
         }
-        if (allApps.isNotEmpty()) {
+        // Icon pack changed in Settings: reload icons off the UI thread, then rebind.
+        val iconsChanged = allApps.isNotEmpty() && IconManager.signature(applicationContext) != iconSig
+        if (iconsChanged) refreshIcons()
+        if (allApps.isNotEmpty() && !iconsChanged) {
             dockApps = resolveDock(applicationContext, allApps) // pick up changes from Settings
             bind()
         }
@@ -314,6 +326,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun reload() {
         val ctx = applicationContext
+        IconManager.invalidate() // icon packs may have been installed / updated / removed
         executor.execute {
             val apps = AppRepository.loadApps(ctx)
             val dockList = resolveDock(ctx, apps)
@@ -639,27 +652,139 @@ class MainActivity : AppCompatActivity() {
     // ---------- Menus ----------
 
     private fun showAppMenu(app: AppInfo, anchor: View, onHome: Boolean) {
-        PopupMenu(this, anchor).apply {
-            menu.add(0, 1, 0, R.string.app_info)
-            menu.add(0, 2, 1, R.string.uninstall)
-            menu.add(0, 3, 2, if (onHome) "Remove from home" else "Add to home")
-            setOnMenuItemClickListener { item ->
-                if (item.itemId == 3) {
-                    if (onHome) homeGrid.removeApp(app) else addToHome(app)
-                } else {
-                    val uri = Uri.fromParts("package", app.packageName, null)
-                    try {
-                        startActivity(
-                            if (item.itemId == 1) Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, uri)
-                            else Intent(Intent.ACTION_DELETE, uri)
-                        )
-                    } catch (e: Exception) {
-                        Toast.makeText(this@MainActivity, "Not available", Toast.LENGTH_SHORT).show()
-                    }
-                }
-                true
+        val target = anchor.findViewById<View>(R.id.icon) ?: anchor
+        val main = ArrayList<AppPopup.Item>()
+        main.add(AppPopup.Item(R.drawable.ic_pop_image, "Edit icon") { showEditIcon(app) })
+        main.add(AppPopup.Item(R.drawable.ic_pop_edit, "Rename") { showRenameDialog(app) })
+        if (!onHome) main.add(AppPopup.Item(R.drawable.ic_pop_add, "Add to home") { addToHome(app) })
+        val danger = ArrayList<AppPopup.Item>()
+        if (onHome) {
+            danger.add(AppPopup.Item(R.drawable.ic_pop_remove, "Remove from home", true) { homeGrid.removeApp(app) })
+        }
+        danger.add(AppPopup.Item(R.drawable.ic_pop_delete, "Uninstall", true) { uninstall(app) })
+        AppPopup(this).show(root, target, app.label, listOf(main, danger)) { openAppInfo(app) }
+    }
+
+    private fun openAppInfo(app: AppInfo) {
+        try {
+            startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", app.packageName, null))
+            )
+        } catch (e: Exception) {
+            Toast.makeText(this, "Not available", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun uninstall(app: AppInfo) {
+        val flags = try { packageManager.getApplicationInfo(app.packageName, 0).flags } catch (e: Exception) { 0 }
+        val pureSystem = (flags and ApplicationInfo.FLAG_SYSTEM) != 0 && (flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+        if (pureSystem) {
+            // Android does not allow removing built-in apps; App info has Disable.
+            Toast.makeText(this, "${app.systemLabel} is a system app and can't be uninstalled. Opening App info.", Toast.LENGTH_LONG).show()
+            openAppInfo(app)
+            return
+        }
+        try {
+            startActivity(Intent(Intent.ACTION_DELETE, Uri.fromParts("package", app.packageName, null)))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Not available", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // ---------- Edit icon / Rename ----------
+
+    private fun showRenameDialog(app: AppInfo) {
+        val d = resources.displayMetrics.density
+        val input = EditText(this)
+        input.setSingleLine()
+        input.setText(app.label)
+        input.setSelection(input.text.length)
+        val box = FrameLayout(this)
+        box.setPadding((20 * d).toInt(), (8 * d).toInt(), (20 * d).toInt(), 0)
+        box.addView(input, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Rename")
+            .setView(box)
+            .setPositiveButton("Save") { _, _ ->
+                val t = input.text.toString().trim()
+                IconManager.setCustomLabel(this, app.component, if (t.isEmpty() || t == app.systemLabel) null else t)
+                reload()
             }
-            show()
+            .setNeutralButton("Reset") { _, _ ->
+                IconManager.setCustomLabel(this, app.component, null)
+                reload()
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        dialog.show()
+        input.requestFocus()
+    }
+
+    private fun showEditIcon(app: AppInfo) {
+        val titles = ArrayList<String>()
+        val actions = ArrayList<() -> Unit>()
+        titles.add("Choose from gallery")
+        actions.add { pickTarget = app; pickImage.launch("image/*") }
+        if (IconManager.installedPacks(this).isNotEmpty()) {
+            titles.add("Choose from icon pack")
+            actions.add { pickFromPack(app) }
+        }
+        if (IconManager.hasIconOverride(this, app.component)) {
+            titles.add("Reset to default icon")
+            actions.add {
+                IconManager.clearIconOverride(this, app.component)
+                refreshIcons()
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle(app.label)
+            .setItems(titles.toTypedArray()) { _, which -> actions[which]() }
+            .show()
+    }
+
+    private fun pickFromPack(app: AppInfo) {
+        val chosen = IconManager.selectedPack(this)
+        val usable = chosen != null && IconManager.installedPacks(this).any { it.pkg == chosen }
+        val pick = { pkg: String ->
+            IconDialogs.pickPackIcon(this, pkg) { name ->
+                IconManager.setPackIconOverride(this, app.component, pkg, name)
+                refreshIcons()
+            }
+        }
+        if (usable && chosen != null) pick(chosen)
+        else IconDialogs.choosePack(this, false) { pkg -> if (pkg != null) pick(pkg) }
+    }
+
+    private fun onImagePicked(uri: Uri?) {
+        val app = pickTarget
+        pickTarget = null
+        if (app == null || uri == null) return
+        val ctx = applicationContext
+        executor.execute {
+            val ok = IconManager.saveGalleryIcon(ctx, app.component, uri)
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                if (ok) refreshIcons()
+                else Toast.makeText(this, "Couldn't use that image", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** Icon pack or a custom icon changed: drop cached icons and redraw everything. */
+    private fun refreshIcons() {
+        val ctx = applicationContext
+        iconSig = IconManager.signature(ctx)
+        executor.execute {
+            IconManager.warm(ctx)
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                IconStyle.clear()
+                if (allApps.isNotEmpty()) {
+                    dockApps = resolveDock(ctx, allApps)
+                    bind()
+                }
+            }
         }
     }
 

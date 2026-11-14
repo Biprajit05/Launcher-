@@ -11,17 +11,21 @@ object AppRepository {
     /** Call from a background thread (loads icons). */
     fun loadApps(ctx: Context): List<AppInfo> {
         val pm = ctx.packageManager
+        IconManager.warm(ctx) // parse the selected icon pack here, not on the UI thread
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         return pm.queryIntentActivities(intent, 0)
             .asSequence()
             .filter { it.activityInfo.packageName != ctx.packageName }
             .map {
                 val ai = it.activityInfo
+                val comp = ComponentName(ai.packageName, ai.name)
+                val systemLabel = it.loadLabel(pm).toString()
                 AppInfo(
-                    it.loadLabel(pm).toString(),
+                    IconManager.customLabel(ctx, comp) ?: systemLabel,
                     ai.packageName,
-                    ComponentName(ai.packageName, ai.name),
-                    it.loadIcon(pm)
+                    comp,
+                    it.loadIcon(pm),
+                    systemLabel
                 )
             }
             .sortedBy { it.label.lowercase() }
