@@ -21,6 +21,11 @@
             android:paddingTop="16dp"
             android:paddingEnd="8dp" />
 
+        <com.example.launcher.PageDots
+            android:id="@+id/pageDots"
+            android:layout_width="match_parent"
+            android:layout_height="16dp" />
+
         <TextView
             android:id="@+id/homeSearch"
             android:layout_width="wrap_content"
