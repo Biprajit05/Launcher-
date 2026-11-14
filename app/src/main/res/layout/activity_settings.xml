@@ -12,7 +12,8 @@
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:text="Open animation style" android:textSize="16sp" android:textStyle="bold" />
         <RadioGroup android:id="@+id/styleGroup" android:layout_width="match_parent" android:layout_height="wrap_content">
-            <RadioButton android:id="@+id/styleScale" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Scale from icon" />
+            <RadioButton android:id="@+id/styleWindow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Expand window from icon (smooth)" />
+            <RadioButton android:id="@+id/styleScale" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Scale from icon (system)" />
             <RadioButton android:id="@+id/styleFade" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Fade" />
             <RadioButton android:id="@+id/styleSlide" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Slide up" />
         </RadioGroup>
