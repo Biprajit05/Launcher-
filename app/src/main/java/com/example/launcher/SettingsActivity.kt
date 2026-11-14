@@ -1,6 +1,13 @@
 package com.example.launcher
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.widget.Button
 import android.widget.RadioGroup
 import android.widget.SeekBar
@@ -70,6 +77,11 @@ class SettingsActivity : AppCompatActivity() {
             setOnCheckedChangeListener { _, checked -> p.unlockAnim = checked }
         }
         bind(R.id.drawerColorGroup, mapOf(R.id.dcAuto to 0, R.id.dcLight to 1, R.id.dcDark to 2), p.drawerColor) { p.drawerColor = it }
+        percentBar(R.id.homeBlurBar, R.id.homeBlurLabel, R.id.homeBlurRestore, "Home blur", p.homeBlur, Prefs.DEFAULT_HOME_BLUR) {
+            p.homeBlur = it
+            BackdropBlur.update(applicationContext, it)
+        }
+        findViewById<Button>(R.id.wallpaperAccessBtn).setOnClickListener { askWallpaperAccess() }
         percentBar(R.id.transBar, R.id.transLabel, R.id.transRestore, "Transparency effect", p.drawerTransparency, Prefs.DEFAULT_TRANSPARENCY) { p.drawerTransparency = it }
         percentBar(R.id.blurBar, R.id.blurLabel, R.id.blurRestore, "Blur effect", p.drawerBlur, Prefs.DEFAULT_BLUR) { p.drawerBlur = it }
 
@@ -104,6 +116,45 @@ class SettingsActivity : AppCompatActivity() {
             p.setHomeLayout(null)
             Toast.makeText(this, "Home screen reset", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun hasWallpaperAccess(): Boolean =
+        if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
+        else checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    private fun updateWallpaperAccessUi() {
+        val ok = hasWallpaperAccess()
+        findViewById<Button>(R.id.wallpaperAccessBtn).text =
+            if (ok) "Wallpaper access: allowed" else "Allow wallpaper access"
+    }
+
+    private fun askWallpaperAccess() {
+        if (hasWallpaperAccess()) {
+            Toast.makeText(this, "Already allowed", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
+            } catch (e: Exception) {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+        } else {
+            requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), 77)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateWallpaperAccessUi()
+        BackdropBlur.update(applicationContext, Prefs(this).homeBlur)
+    }
+
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        updateWallpaperAccessUi()
+        BackdropBlur.update(applicationContext, Prefs(this).homeBlur)
     }
 
     /** A 0..100 slider with a live "title: N%" label and a Restore button. */

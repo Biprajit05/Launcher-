@@ -207,6 +207,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
         homeSearch.setOnClickListener { openDrawerForSearch() }
+        homeSearch.background = FrostDrawable(homeSearch, 0.5f, Color.argb(0x4D, 0xFF, 0xFF, 0xFF), Color.argb(0x99, 0xFF, 0xFF, 0xFF))
+        BackdropBlur.onChanged = {
+            homeSearch.invalidate()
+            homeGrid.invalidateFolders()
+        }
+        BackdropBlur.update(applicationContext, prefs.homeBlur)
 
         val menuFromList: (AppInfo, View) -> Unit = { a, v -> showAppMenu(a, v, false) }
         // Drawer: long-press then drag = put on the dock; long-press and release = menu.
@@ -237,6 +243,9 @@ class MainActivity : AppCompatActivity() {
         homeGrid.onChanged = { items, pages -> prefs.setHomePages(HomeStore.encode(items, pages)) }
         homeGrid.onPageScroll = { count, pos -> onHomePageScroll(count, pos) }
         homeGrid.widgetFactory = { id -> createWidgetView(id) }
+        homeGrid.widgetResizeMode = { id ->
+            try { widgetManager.getAppWidgetInfo(id)?.resizeMode ?: AppWidgetProviderInfo.RESIZE_NONE } catch (e: Exception) { AppWidgetProviderInfo.RESIZE_BOTH }
+        }
         homeGrid.onWidgetGone = { id ->
             try { widgetHost.deleteAppWidgetId(id) } catch (e: Exception) { /* already gone */ }
         }
@@ -362,6 +371,7 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         if (editPanel != null) exitEditMode()
         else if (folderOv != null) closeFolder()
+        else if (homeGrid.isResizing) homeGrid.endResize()
         else if (homeGrid.isSelecting) homeGrid.clearSelection()
         else if (drawerOpen) animateDrawer(false) // Home button closes the drawer
         else if (homeGrid.currentPage != 0 && !homeGrid.isDragging) homeGrid.goToPage(0)
@@ -372,6 +382,7 @@ class MainActivity : AppCompatActivity() {
         // Never leave the launcher; only close the folder / selection / drawer.
         if (editPanel != null) exitEditMode()
         else if (folderOv != null) closeFolder()
+        else if (homeGrid.isResizing) homeGrid.endResize()
         else if (homeGrid.isSelecting) homeGrid.clearSelection()
         else if (drawerOpen) animateDrawer(false)
     }
@@ -410,10 +421,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bind(resetHome: Boolean = true) {
+        BackdropBlur.update(applicationContext, prefs.homeBlur)
         val cols = prefs.columns
         dock.visibility = if (prefs.dockEnabled) View.VISIBLE else View.GONE
         if (prefs.dockBackground) dock.setBackgroundResource(R.drawable.dock_bg) else dock.background = null
         (drawerList.layoutManager as GridLayoutManager).spanCount = cols
+        updateDockPadding(dockApps.size)
         dockAdapter.submit(dockApps)
         shownDock = null
         dock.alpha = if (dockApps.isEmpty()) 0f else 1f
@@ -929,11 +942,23 @@ class MainActivity : AppCompatActivity() {
         AppInfo("", AppInfo.GAP_PKG, ComponentName(AppInfo.GAP_PKG, "gap"), ColorDrawable(Color.TRANSPARENT))
     }
 
-    /** Width of one dock cell (px): the dock is MAX_DOCK cells wide when full. */
-    private fun dockCellW(): Int {
+    /** Space the dock can use: the full screen width minus the same 8dp the home grid keeps at its sides. */
+    private fun dockAvailW(): Int =
+        resources.displayMetrics.widthPixels - (16 * resources.displayMetrics.density).toInt()
+
+    /**
+     * Width of one dock cell (px). With up to as many apps as the home grid has columns the cells are
+     * exactly as wide as home cells (so icons are the same size); with more apps the cells (and icons) shrink.
+     */
+    private fun dockCellW(slots: Int = (shownDock ?: dockApps).size): Int =
+        dockAvailW() / max(slots, prefs.homeCols)
+
+    /** Centres the icons in the full-width dock, so there is no empty strip at either side of the panel. */
+    private fun updateDockPadding(slots: Int) {
         val d = resources.displayMetrics.density
-        val avail = resources.displayMetrics.widthPixels - 36 * d // margins + padding
-        return min(72f * d, avail / MAX_DOCK).toInt()
+        val side = ((dockAvailW() - slots * dockCellW(slots)) / 2).coerceAtLeast(0)
+        val v = (6 * d).toInt()
+        if (dock.paddingLeft != side || dock.paddingTop != v) dock.setPadding(side, v, side, v)
     }
 
     private fun homeCenterX(): Float {
@@ -944,7 +969,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Position (0 until slots) the finger is over, for a centred row of [slots] cells. */
     private fun dockIndexAt(x: Float, slots: Int): Int {
-        val cell = dockCellW() * home.scaleX
+        val cell = dockCellW(slots) * home.scaleX
         val rel = (x - homeCenterX()) / cell + (slots - 1) / 2f
         return Math.round(rel).coerceIn(0, max(0, slots - 1))
     }
@@ -975,7 +1000,9 @@ class MainActivity : AppCompatActivity() {
         if (shownDock == list) return
         shownDock = list
         dock.alpha = if (list.isEmpty()) 0f else 1f
+        updateDockPadding(list.size)
         dockAdapter.submitAnimated(list)
+        dockAdapter.refreshSizes()
     }
 
     /** While an icon is dragged: open a gap in the dock where it would land. */
@@ -1174,7 +1201,7 @@ class MainActivity : AppCompatActivity() {
             val dy = ev.y - downY
             if (abs(dy) > slop && abs(dy) > abs(dx) && !homeGrid.isPaging) {
                 // A swipe that starts on a widget belongs to the widget (so lists inside it can scroll).
-                val canOpen = !drawerOpen && dy < 0 && !homeGrid.touchOnWidget && editPanel == null
+                val canOpen = !drawerOpen && dy < 0 && !homeGrid.touchOnWidget && !homeGrid.isResizing && editPanel == null
                 val canClose = drawerOpen && dy > 0 && !drawerList.canScrollVertically(-1)
                 if (canOpen || canClose) {
                     startDrag(ev)
@@ -1691,12 +1718,13 @@ class MainActivity : AppCompatActivity() {
     private fun applyFolderBlur(p: Float) {
         if (Build.VERSION.SDK_INT < 31) return
         val d = resources.displayMetrics.density
-        val r = p * 26f * d
+        val k = BackdropBlur.factor()
+        val r = p * 26f * d * k
         home.setRenderEffect(
             if (r < 1f) null else RenderEffect.createBlurEffect(r, r, Shader.TileMode.CLAMP)
         )
         try {
-            if (windowManager.isCrossWindowBlurEnabled) window.setBackgroundBlurRadius((p * 40f * d).toInt())
+            if (windowManager.isCrossWindowBlurEnabled) window.setBackgroundBlurRadius((p * 40f * d * k).toInt().coerceAtMost(500))
         } catch (e: Exception) { /* not supported */ }
     }
 
@@ -1915,7 +1943,7 @@ class MainActivity : AppCompatActivity() {
         pendingWidgetId = id
         pendingProvider = info
         val bound = try {
-            widgetManager.bindAppWidgetIdIfAllowed(id, info.provider)
+            widgetManager.bindAppWidgetIdIfAllowed(id, info.provider, sizeOptions(info))
         } catch (e: Exception) {
             false
         }
@@ -1927,11 +1955,26 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND)
             .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
             .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, info.provider)
+            .putExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS, sizeOptions(info))
         try {
             startActivityForResult(intent, REQ_WIDGET_BIND)
         } catch (e: Exception) {
             dropPendingWidget()
             Toast.makeText(this, "Can't add this widget", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Tells the widget how big it will be (many widgets draw nothing without this). */
+    private fun sizeOptions(info: AppWidgetProviderInfo): android.os.Bundle {
+        val d = resources.displayMetrics.density
+        val span = spanFor(info)
+        val w = max(1, homeGrid.cellWidthPx) * span.first / d
+        val h = max(1, homeGrid.cellHeightPx) * span.second / d
+        return android.os.Bundle().apply {
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, w.toInt())
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, w.toInt())
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, h.toInt())
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, h.toInt())
         }
     }
 
@@ -1954,6 +1997,9 @@ class MainActivity : AppCompatActivity() {
         if (!homeGrid.addWidget(id, span.first, span.second)) {
             try { widgetHost.deleteAppWidgetId(id) } catch (e: Exception) { /* ignore */ }
             Toast.makeText(this, "No space on the home screen", Toast.LENGTH_SHORT).show()
+        } else if (info.resizeMode != AppWidgetProviderInfo.RESIZE_NONE) {
+            // Handles appear right away so the size can be adjusted (tap outside to finish).
+            homeGrid.post { homeGrid.beginResizeWidget(id) }
         }
     }
 
@@ -1995,7 +2041,7 @@ class MainActivity : AppCompatActivity() {
         val info = widgetManager.getAppWidgetInfo(item.widgetId)
         val main = ArrayList<AppPopup.Item>()
         if (info == null || info.resizeMode != AppWidgetProviderInfo.RESIZE_NONE) {
-            main.add(AppPopup.Item(R.drawable.ic_pop_edit, "Resize") { showResizeWidget(item) })
+            main.add(AppPopup.Item(R.drawable.ic_pop_edit, "Resize") { homeGrid.beginResize(item) })
         }
         val danger = listOf(AppPopup.Item(R.drawable.ic_pop_remove, "Remove widget", true) { removeWidget(item) })
         val name = if (info != null) info.loadLabel(packageManager) else "Widget"
@@ -2005,48 +2051,6 @@ class MainActivity : AppCompatActivity() {
     private fun removeWidget(item: HomeItem) {
         homeGrid.removeWidget(item)
         try { widgetHost.deleteAppWidgetId(item.widgetId) } catch (e: Exception) { /* ignore */ }
-    }
-
-    private fun showResizeWidget(item: HomeItem) {
-        val builder = AlertDialog.Builder(this)
-        val ctx = builder.context
-        val d = resources.displayMetrics.density
-        var newW = item.spanC
-        var newH = item.spanR
-        val box = LinearLayout(ctx)
-        box.orientation = LinearLayout.VERTICAL
-        box.setPadding((24 * d).toInt(), (12 * d).toInt(), (24 * d).toInt(), 0)
-
-        fun addRow(name: String, maxCells: Int, start: Int, onChange: (Int) -> Unit) {
-            val label = TextView(ctx)
-            label.text = "$name: $start"
-            label.textSize = 15f
-            val bar = SeekBar(ctx)
-            bar.max = max(0, maxCells - 1)
-            bar.progress = (start - 1).coerceIn(0, max(0, maxCells - 1))
-            bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    label.text = "$name: ${progress + 1}"
-                    onChange(progress + 1)
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-            })
-            box.addView(label)
-            box.addView(bar)
-        }
-        addRow("Width (columns)", prefs.homeCols, newW) { newW = it }
-        addRow("Height (rows)", prefs.homeRows, newH) { newH = it }
-
-        builder.setTitle("Resize widget")
-            .setView(box)
-            .setPositiveButton("Apply") { _, _ ->
-                if (!homeGrid.resizeWidget(item, newW, newH)) {
-                    Toast.makeText(this, "Not enough space for that size", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
     }
 
     private companion object {

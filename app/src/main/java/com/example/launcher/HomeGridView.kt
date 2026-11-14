@@ -79,6 +79,17 @@ class HomeGridView @JvmOverloads constructor(
     /** True while the current touch started on a widget (the widget then owns vertical swipes). */
     var touchOnWidget = false
 
+    /** Which sides of a widget may be resized: RESIZE_HORIZONTAL / RESIZE_VERTICAL flags of its provider. */
+    var widgetResizeMode: ((Int) -> Int)? = null
+
+    // ----- widget resize frame -----
+    private var resizeEntry: Entry? = null
+    private var resizeHandle = -1
+    private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val handleFill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val handleRing = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val frameRect = android.graphics.RectF()
+
     private val entries = ArrayList<Entry>()
     private var cols = 4
     private var rows = 6
@@ -132,6 +143,7 @@ class HomeGridView @JvmOverloads constructor(
     private val checkPath = Path()
     private val tmpRect = Rect()
 
+    val isResizing: Boolean get() = resizeEntry != null
     val isDragging: Boolean get() = dragEntry != null
     val isPaging: Boolean get() = paging
     val cellWidthPx: Int get() = cellW
@@ -158,6 +170,8 @@ class HomeGridView @JvmOverloads constructor(
 
     fun setItems(items: List<HomeItem>, pages: Int) {
         if (dragEntry != null) return
+        resizeEntry = null
+        resizeHandle = -1
         // Keep the live widget views so they don't flicker when the list is rebuilt.
         val reuse = HashMap<Int, View>()
         for (e in entries) {
@@ -242,6 +256,101 @@ class HomeGridView @JvmOverloads constructor(
             }
         }
         afterStructureChange()
+    }
+
+    /** Shows resize handles around a widget (drag an edge to change how many cells it covers). */
+    fun beginResize(item: HomeItem) {
+        val e = entries.firstOrNull { it.item === item } ?: return
+        resizeEntry = e
+        resizeHandle = -1
+        if (item.page != currentPage) goToPage(item.page)
+        invalidate()
+    }
+
+    fun beginResizeWidget(widgetId: Int) {
+        val e = entries.firstOrNull { it.item.kind == HomeItem.WIDGET && it.item.widgetId == widgetId } ?: return
+        beginResize(e.item)
+    }
+
+    fun endResize() {
+        if (resizeEntry == null) return
+        resizeEntry = null
+        resizeHandle = -1
+        invalidate()
+    }
+
+    private fun resizeFlags(e: Entry): Int =
+        widgetResizeMode?.invoke(e.item.widgetId) ?: 3
+
+    /** 0 = left, 1 = top, 2 = right, 3 = bottom; -1 = none. [cx]/[cy] are content coordinates. */
+    private fun handleAt(cx: Float, cy: Float): Int {
+        val e = resizeEntry ?: return -1
+        val v = e.view
+        val flags = resizeFlags(e)
+        val mx = (v.left + v.right) / 2f
+        val my = (v.top + v.bottom) / 2f
+        val hit = 30f * density
+        var best = -1
+        var bestD = Float.MAX_VALUE
+        fun test(id: Int, x: Float, y: Float) {
+            val d = hypot(cx - x, cy - y)
+            if (d <= hit && d < bestD) { best = id; bestD = d }
+        }
+        if (flags and 1 != 0) { test(0, v.left.toFloat(), my); test(2, v.right.toFloat(), my) }
+        if (flags and 2 != 0) { test(1, mx, v.top.toFloat()); test(3, mx, v.bottom.toFloat()) }
+        return best
+    }
+
+    private fun resizeTo(ev: MotionEvent) {
+        val e = resizeEntry ?: return
+        val m = e.item
+        val fx = (ev.x + scrollX - m.page * width - paddingLeft) / cellW
+        val fy = (ev.y - paddingTop) / cellH
+        var c = m.col
+        var r = m.row
+        var sc = m.spanC
+        var sr = m.spanR
+        when (resizeHandle) {
+            0 -> { val right = m.col + m.spanC; c = fx.roundToInt().coerceIn(0, right - 1); sc = right - c }
+            2 -> sc = (fx.roundToInt() - m.col).coerceIn(1, cols - m.col)
+            1 -> { val bottom = m.row + m.spanR; r = fy.roundToInt().coerceIn(0, bottom - 1); sr = bottom - r }
+            3 -> sr = (fy.roundToInt() - m.row).coerceIn(1, rows - m.row)
+        }
+        if (c == m.col && r == m.row && sc == m.spanC && sr == m.spanR) return
+        if (!regionFree(occupancy(m.page, e), c, r, sc, sr)) return
+        m.col = c
+        m.row = r
+        m.spanC = sc
+        m.spanR = sr
+        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        requestLayout()
+        invalidate()
+    }
+
+    private fun drawResizeFrame(canvas: Canvas) {
+        val e = resizeEntry ?: return
+        val v = e.view
+        val inset = 2f * density
+        frameRect.set(v.left + inset, v.top + inset, v.right - inset, v.bottom - inset)
+        framePaint.style = Paint.Style.STROKE
+        framePaint.strokeWidth = 2f * density
+        framePaint.color = Color.argb(230, 255, 255, 255)
+        canvas.drawRoundRect(frameRect, 18f * density, 18f * density, framePaint)
+        handleFill.style = Paint.Style.FILL
+        handleFill.color = Color.WHITE
+        handleRing.style = Paint.Style.STROKE
+        handleRing.strokeWidth = 1.5f * density
+        handleRing.color = Color.argb(90, 0, 0, 0)
+        val flags = resizeFlags(e)
+        val mx = (v.left + v.right) / 2f
+        val my = (v.top + v.bottom) / 2f
+        val r = 8f * density
+        fun dot(x: Float, y: Float) {
+            canvas.drawCircle(x, y, r, handleFill)
+            canvas.drawCircle(x, y, r, handleRing)
+        }
+        if (flags and 1 != 0) { dot(v.left.toFloat(), my); dot(v.right.toFloat(), my) }
+        if (flags and 2 != 0) { dot(mx, v.top.toFloat()); dot(mx, v.bottom.toFloat()) }
     }
 
     /** Resizes a widget; false if there is no room for the new size. */
@@ -415,6 +524,7 @@ class HomeGridView @JvmOverloads constructor(
     /** Round check marks on the icons while selecting. */
     override fun dispatchDraw(canvas: Canvas) {
         super.dispatchDraw(canvas)
+        drawResizeFrame(canvas)
         if (!isSelecting || dragEntry != null) return
         val r = 10f * density
         for (e in entries) {
@@ -709,6 +819,14 @@ class HomeGridView @JvmOverloads constructor(
     override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
         super.onScrollChanged(l, t, oldl, oldt)
         notifyPageScroll()
+        invalidateFolders()
+    }
+
+    /** Frosted folder tiles read the wallpaper behind them, so they must redraw when they move or the blur changes. */
+    fun invalidateFolders() {
+        for (e in entries) {
+            if (e.item.kind == HomeItem.FOLDER) e.view.findViewById<View>(R.id.icon)?.invalidate()
+        }
     }
 
     // ---------- Views ----------
@@ -907,6 +1025,18 @@ class HomeGridView @JvmOverloads constructor(
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                val re = resizeEntry
+                if (re != null) {
+                    val h = handleAt(ev.x + scrollX, ev.y)
+                    if (h >= 0) {
+                        resizeHandle = h
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                        return true
+                    }
+                    val v = re.view
+                    val cx = ev.x + scrollX
+                    if (cx < v.left || cx >= v.right || ev.y < v.top || ev.y >= v.bottom) endResize()
+                }
                 beginTouch(ev)
                 return false
             }
@@ -945,6 +1075,16 @@ class HomeGridView @JvmOverloads constructor(
     override fun onTouchEvent(ev: MotionEvent): Boolean {
         rawX = ev.rawX
         rawY = ev.rawY
+        if (resizeHandle >= 0) {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_MOVE -> resizeTo(ev)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    resizeHandle = -1
+                    notifyChanged()
+                }
+            }
+            return true
+        }
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> beginTouch(ev)
             MotionEvent.ACTION_MOVE -> {
@@ -1068,6 +1208,7 @@ class HomeGridView @JvmOverloads constructor(
             }
         }
         groupDrag = isSelecting
+        endResize()
         dragEntry = e
         dragFar = false
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)

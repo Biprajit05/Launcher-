@@ -35,25 +35,30 @@ object FolderIcon {
             lp.height = px
             icon.layoutParams = lp
         }
-        icon.setImageDrawable(BitmapDrawable(icon.resources, render(icon.context, folder, px, shape)))
+        // The glass tile is a live frosted background (blurred wallpaper); the bitmap only holds the mini icons.
+        icon.background = FrostDrawable(icon, radiusFrac(shape), Color.argb(0x4D, 0xFF, 0xFF, 0xFF), Color.argb(0x8C, 0xFF, 0xFF, 0xFF))
+        icon.setImageDrawable(BitmapDrawable(icon.resources, render(icon.context, folder, px, shape, false)))
         label.text = folder.name
         label.textSize = 12f * labelScale
     }
 
-    fun render(ctx: Context, folder: FolderData, size: Int, shape: Int): Bitmap {
+    private fun radiusFrac(shape: Int): Float = when (shape) {
+        1 -> 0.5f
+        2 -> 0.34f
+        4 -> 0.06f
+        5 -> 0.40f
+        else -> 0.22f
+    }
+
+    fun render(ctx: Context, folder: FolderData, size: Int, shape: Int, withTile: Boolean = true): Bitmap {
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        paint.color = Color.argb(0x73, 0xFF, 0xFF, 0xFF)
-        val frac = when (shape) {
-            1 -> 0.5f
-            2 -> 0.34f
-            4 -> 0.06f
-            5 -> 0.40f
-            else -> 0.22f
+        if (withTile) {
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+            paint.color = Color.argb(0x73, 0xFF, 0xFF, 0xFF)
+            val radius = size * radiusFrac(shape)
+            c.drawRoundRect(RectF(0f, 0f, size.toFloat(), size.toFloat()), radius, radius, paint)
         }
-        val radius = size * frac
-        c.drawRoundRect(RectF(0f, 0f, size.toFloat(), size.toFloat()), radius, radius, paint)
 
         val apps = folder.apps
         val n = if (apps.size > 4) 3 else 2

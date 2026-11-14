@@ -114,7 +114,20 @@ class AppAdapter(
         diff.dispatchUpdatesTo(this)
     }
 
+    /** Dock only: the cell width changed (apps added / removed), so resize every cell without a change animation. */
+    fun refreshSizes() {
+        if (cellWidth != null && items.isNotEmpty()) notifyItemRangeChanged(0, items.size, "size")
+    }
+
     override fun onBindViewHolder(holder: VH, position: Int) {
+        cellWidth?.let { cw ->
+            val lp = holder.itemView.layoutParams
+            val w = cw()
+            if (lp != null && lp.width != w) {
+                lp.width = w
+                holder.itemView.layoutParams = lp
+            }
+        }
         val app = items[position]
         if (app.packageName == AppInfo.GAP_PKG) {
             holder.icon.setImageDrawable(null)

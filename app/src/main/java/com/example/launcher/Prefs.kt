@@ -70,9 +70,18 @@ class Prefs(context: Context) {
         get() = sp.getInt("drawer_blur", DEFAULT_BLUR)
         set(v) = sp.edit().putInt("drawer_blur", v).apply()
 
+    /**
+     * One blur control for the whole home screen: folder tiles, the search pill and the
+     * blur behind an open folder. 0 = clear .. 100 = very blurry.
+     */
+    var homeBlur: Int
+        get() = sp.getInt("home_blur", DEFAULT_HOME_BLUR)
+        set(v) = sp.edit().putInt("home_blur", v).apply()
+
     companion object {
         const val DEFAULT_TRANSPARENCY = 85
         const val DEFAULT_BLUR = 55
+        const val DEFAULT_HOME_BLUR = 50
     }
 
     /** Home screen zooms in (from big + blurry) when the phone is unlocked. */
