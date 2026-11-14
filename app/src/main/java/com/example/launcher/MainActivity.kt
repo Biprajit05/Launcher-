@@ -10,9 +10,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
@@ -21,8 +24,11 @@ import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.RoundedCorner
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
+import android.view.animation.PathInterpolator
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -31,6 +37,7 @@ import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -44,6 +51,7 @@ import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.min
 
 class MainActivity : AppCompatActivity() {
 
@@ -91,6 +99,19 @@ class MainActivity : AppCompatActivity() {
     private var vt: VelocityTracker? = null
     private val slop by lazy { ViewConfiguration.get(this).scaledTouchSlop }
     private val executor = Executors.newSingleThreadExecutor()
+
+    // "Expand window from icon" launch animation
+    private var launchOv: LaunchOverlay? = null
+    private var ovAnim: ValueAnimator? = null
+    private var ovOpening = false
+    private var ovClosing = false
+    private var closeWhenOpened = false
+    private var resumedNow = false
+    private val ui = Handler(Looper.getMainLooper())
+    private val launchFailSafe = Runnable {
+        // Nothing took over the screen (launch failed / translucent app): give the home screen back.
+        if (launchOv != null && !ovClosing && resumedNow) closeLaunchOverlay()
+    }
 
     private val pkgReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) = reload()
@@ -197,11 +218,23 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(pkgReceiver)
+        ui.removeCallbacksAndMessages(null)
+        ovAnim?.cancel()
         executor.shutdown()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        resumedNow = false
     }
 
     override fun onResume() {
         super.onResume()
+        resumedNow = true
+        // Coming back from an app: shrink the window back into its icon.
+        if (launchOv != null && !ovClosing) {
+            if (ovOpening) closeWhenOpened = true else closeLaunchOverlay()
+        }
         updateBars(drawerOpen)
         if (allApps.isNotEmpty()) {
             dockApps = resolveDock(applicationContext, allApps) // pick up changes from Settings
@@ -309,10 +342,15 @@ class MainActivity : AppCompatActivity() {
     // ---------- Launch ----------
 
     private fun launch(app: AppInfo, iconView: View) {
+        if (launchOv != null && !ovClosing) return // a launch is already running
         val intent = Intent(Intent.ACTION_MAIN)
             .addCategory(Intent.CATEGORY_LAUNCHER)
             .setComponent(app.component)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        if (prefs.style == 3) {
+            expandLaunch(app, intent, iconView)
+            return
+        }
         try {
             startActivity(intent, buildOptions(iconView))
             // shrink + dim whichever layer the user tapped in
@@ -320,6 +358,141 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Toast.makeText(this, "Can't open ${app.label}", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    // ---------- Expand-from-icon launch / shrink-back-to-icon return ----------
+
+    private val openInterp = PathInterpolator(0.2f, 0f, 0f, 1f)
+    private val closeInterp = PathInterpolator(0.3f, 0f, 0f, 1f)
+
+    /** Icon bounds in root coordinates, including any scale (press effect, drawer scale). */
+    private fun rectInRoot(v: View): RectF {
+        val a = IntArray(2); v.getLocationOnScreen(a)
+        val r = IntArray(2); root.getLocationOnScreen(r)
+        var sx = 1f
+        var sy = 1f
+        var p: View? = v
+        while (p != null && p !== root) {
+            sx *= p.scaleX; sy *= p.scaleY
+            p = p.parent as? View
+        }
+        val left = (a[0] - r[0]).toFloat()
+        val top = (a[1] - r[1]).toFloat()
+        return RectF(left, top, left + v.width * sx, top + v.height * sy)
+    }
+
+    private fun iconCornerRadius(size: Float): Float = when (prefs.shape) {
+        1 -> size / 2f      // circle
+        2 -> size * 0.34f   // squircle
+        4 -> size * 0.06f   // square
+        5 -> size * 0.40f   // teardrop
+        else -> size * 0.22f // original / rounded square
+    }
+
+    private fun deviceCornerRadius(): Float {
+        if (Build.VERSION.SDK_INT >= 31) {
+            val c = root.rootWindowInsets?.getRoundedCorner(RoundedCorner.POSITION_TOP_LEFT)
+            if (c != null && c.radius > 0) return c.radius.toFloat()
+        }
+        return 28 * resources.displayMetrics.density
+    }
+
+    private fun expandLaunch(app: AppInfo, intent: Intent, iconView: View) {
+        removeLaunchOverlay() // clear a previous overlay that is still shrinking
+        val density = resources.displayMetrics.density
+        val w = root.width.toFloat()
+        val h = root.height.toFloat()
+        if (w <= 0f || h <= 0f) { // not laid out yet: plain launch
+            try { startActivity(intent) } catch (e: Exception) { cantOpen(app) }
+            return
+        }
+        val src = rectInRoot(iconView)
+        val ov = LaunchOverlay(this).apply {
+            from.set(src)
+            to.set(0f, 0f, w, h)
+            fromRadius = iconCornerRadius(src.width())
+            toRadius = deviceCornerRadius()
+            iconFrom = min(src.width(), src.height())
+            iconTo = min(w * 0.26f, 110 * density)
+            fillColor = ContextCompat.getColor(this@MainActivity, R.color.splash_bg)
+            val d = (iconView as? ImageView)?.drawable
+            icon = d?.constantState?.newDrawable(resources)?.mutate() ?: d ?: app.icon
+            progress = 0f
+        }
+        (root as ViewGroup).addView(ov, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        launchOv = ov
+        ovClosing = false
+        closeWhenOpened = false
+        hideKeyboard()
+
+        // Animation starts on the very next frame; the activity is started right after.
+        ovOpening = true
+        ovAnim?.cancel()
+        ovAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = (380 * prefs.factor).toLong()
+            interpolator = openInterp
+            addUpdateListener { ov.progress = it.animatedValue as Float }
+            addListener(object : AnimatorListenerAdapter() {
+                var cancelled = false
+                override fun onAnimationCancel(animation: Animator) { cancelled = true }
+                override fun onAnimationEnd(animation: Animator) {
+                    if (cancelled) return
+                    ovOpening = false
+                    if (closeWhenOpened) { closeWhenOpened = false; closeLaunchOverlay() }
+                }
+            })
+            start()
+        }
+
+        // The app's own window fades in on top of the overlay once it is nearly full-screen.
+        val d = prefs.speed
+        val opts = ActivityOptions.makeCustomAnimation(this, anim("expand_in_$d"), anim("expand_hold_$d"))
+        try {
+            startActivity(intent, opts.toBundle())
+            ui.removeCallbacks(launchFailSafe)
+            ui.postDelayed(launchFailSafe, 1500)
+        } catch (e: Exception) {
+            removeLaunchOverlay()
+            cantOpen(app)
+        }
+    }
+
+    private fun cantOpen(app: AppInfo) =
+        Toast.makeText(this, "Can't open ${app.label}", Toast.LENGTH_SHORT).show()
+
+    /** Shrink the window back into the icon, then drop the overlay. Taps pass through while it runs. */
+    private fun closeLaunchOverlay() {
+        val ov = launchOv ?: return
+        ui.removeCallbacks(launchFailSafe)
+        ovAnim?.cancel()
+        ovOpening = false
+        ovClosing = true
+        ov.isClickable = false
+        val startP = ov.progress
+        ovAnim = ValueAnimator.ofFloat(startP, 0f).apply {
+            duration = (330 * prefs.factor * max(startP, 0.4f)).toLong().coerceAtLeast(120L)
+            interpolator = closeInterp
+            addUpdateListener { ov.progress = it.animatedValue as Float }
+            addListener(object : AnimatorListenerAdapter() {
+                var cancelled = false
+                override fun onAnimationCancel(animation: Animator) { cancelled = true }
+                override fun onAnimationEnd(animation: Animator) {
+                    if (!cancelled && launchOv === ov) removeLaunchOverlay()
+                }
+            })
+            start()
+        }
+    }
+
+    private fun removeLaunchOverlay() {
+        ui.removeCallbacks(launchFailSafe)
+        ovAnim?.cancel()
+        ovAnim = null
+        launchOv?.let { (root as ViewGroup).removeView(it) }
+        launchOv = null
+        ovOpening = false
+        ovClosing = false
+        closeWhenOpened = false
     }
 
     private fun buildOptions(iconView: View): Bundle {

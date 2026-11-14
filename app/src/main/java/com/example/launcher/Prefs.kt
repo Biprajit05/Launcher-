@@ -5,9 +5,9 @@ import android.content.Context
 class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("launcher_prefs", Context.MODE_PRIVATE)
 
-    /** 0 = scale from icon, 1 = fade, 2 = slide up */
+    /** 0 = scale from icon (system), 1 = fade, 2 = slide up, 3 = expand window from icon (default) */
     var style: Int
-        get() = sp.getInt("style", 0)
+        get() = sp.getInt("style", 3)
         set(v) = sp.edit().putInt("style", v).apply()
 
     /** 250 / 450 / 800 ms */
