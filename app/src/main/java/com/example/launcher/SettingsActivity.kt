@@ -65,6 +65,10 @@ class SettingsActivity : AppCompatActivity() {
 
         bind(R.id.homeGridGroup, mapOf(R.id.grid4x6 to 0, R.id.grid4x7 to 1, R.id.grid5x6 to 2), p.homeGrid) { p.homeGrid = it }
 
+        findViewById<SwitchCompat>(R.id.unlockSwitch).apply {
+            isChecked = p.unlockAnim
+            setOnCheckedChangeListener { _, checked -> p.unlockAnim = checked }
+        }
         bind(R.id.drawerColorGroup, mapOf(R.id.dcAuto to 0, R.id.dcLight to 1, R.id.dcDark to 2), p.drawerColor) { p.drawerColor = it }
         percentBar(R.id.transBar, R.id.transLabel, R.id.transRestore, "Transparency effect", p.drawerTransparency, Prefs.DEFAULT_TRANSPARENCY) { p.drawerTransparency = it }
         percentBar(R.id.blurBar, R.id.blurLabel, R.id.blurRestore, "Blur effect", p.drawerBlur, Prefs.DEFAULT_BLUR) { p.drawerBlur = it }

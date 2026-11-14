@@ -4,6 +4,10 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.app.ActivityOptions
+import android.app.KeyguardManager
+import android.graphics.RenderEffect
+import android.graphics.Shader
+import android.os.PowerManager
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -104,6 +108,25 @@ class MainActivity : AppCompatActivity() {
     private val executor = Executors.newSingleThreadExecutor()
 
     // "Expand window from icon" launch animation
+    // Unlock animation: home is parked big + invisible while the screen is off, then zooms in on unlock.
+    private var unlockPending = false
+    private var unlockAnim: ValueAnimator? = null
+    private var unlockBlur = -1
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_SCREEN_OFF -> if (resumedNow) prepareUnlock()
+                Intent.ACTION_USER_PRESENT -> playUnlock()
+                Intent.ACTION_SCREEN_ON -> if (unlockPending && !keyguardLocked()) playUnlock()
+            }
+        }
+    }
+    private val unlockWatch = object : Runnable {
+        override fun run() {
+            if (!unlockPending) return
+            if (resumedNow && !keyguardLocked()) playUnlock() else ui.postDelayed(this, 400)
+        }
+    }
     private var blurOn = false
     private var lastBlur = -1
     private var blurMaxPx = 0f
@@ -198,6 +221,11 @@ class MainActivity : AppCompatActivity() {
 
         search.doAfterTextChanged { applyFilter(it?.toString().orEmpty()) }
 
+        registerReceiver(screenReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        })
         registerReceiver(pkgReceiver, IntentFilter().apply {
             addAction(Intent.ACTION_PACKAGE_ADDED)
             addAction(Intent.ACTION_PACKAGE_REMOVED)
@@ -232,6 +260,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(pkgReceiver)
+        unregisterReceiver(screenReceiver)
         ui.removeCallbacksAndMessages(null)
         ovAnim?.cancel()
         executor.shutdown()
@@ -240,6 +269,8 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         resumedNow = false
+        // Paused because the screen turned off (not because an app was opened): park the home screen.
+        if (!getSystemService(PowerManager::class.java).isInteractive) prepareUnlock()
     }
 
     override fun onResume() {
@@ -251,11 +282,16 @@ class MainActivity : AppCompatActivity() {
         }
         updateBars(drawerOpen)
         applyDrawerStyle()
+        if (unlockPending) {
+            if (!prefs.unlockAnim) resetUnlock()
+            else if (!keyguardLocked()) playUnlock()
+            else { ui.removeCallbacks(unlockWatch); ui.postDelayed(unlockWatch, 400) }
+        }
         if (allApps.isNotEmpty()) {
             dockApps = resolveDock(applicationContext, allApps) // pick up changes from Settings
             bind()
         }
-        if (drawerAnim?.isRunning != true) {
+        if (drawerAnim?.isRunning != true && !unlockPending && unlockAnim?.isRunning != true) {
             val s = if (drawerOpen) 0.94f else 1f
             val a = if (drawerOpen) 0f else 1f
             animateLayer(home, s, a, prefs.speed.toLong())
@@ -376,8 +412,75 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- Unlock animation ----------
+
+    private fun keyguardLocked() = getSystemService(KeyguardManager::class.java).isKeyguardLocked
+
+    /** Screen went off with the home screen showing: park it big and invisible, ready to zoom in. */
+    private fun prepareUnlock() {
+        if (!prefs.unlockAnim || drawerOpen || launchOv != null || unlockPending) return
+        unlockAnim?.cancel()
+        unlockPending = true
+        home.scaleX = UNLOCK_SCALE
+        home.scaleY = UNLOCK_SCALE
+        home.alpha = 0f
+    }
+
+    private fun resetUnlock() {
+        unlockPending = false
+        ui.removeCallbacks(unlockWatch)
+        unlockAnim?.cancel()
+        if (Build.VERSION.SDK_INT >= 31) home.setRenderEffect(null)
+        home.setLayerType(View.LAYER_TYPE_NONE, null)
+        if (!drawerOpen) { home.scaleX = 1f; home.scaleY = 1f; home.alpha = 1f }
+    }
+
+    /** Home zooms from big + blurry down to normal while it fades in. */
+    private fun playUnlock() {
+        if (!unlockPending) return
+        unlockPending = false
+        ui.removeCallbacks(unlockWatch)
+        if (!prefs.unlockAnim || drawerOpen) { resetUnlock(); return }
+        unlockAnim?.cancel()
+        unlockBlur = -1
+        val blurMax = 26 * resources.displayMetrics.density
+        home.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        unlockAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = (520 * prefs.factor).toLong()
+            interpolator = PathInterpolator(0.1f, 0.85f, 0.2f, 1f)
+            addUpdateListener {
+                val p = it.animatedValue as Float
+                val sc = UNLOCK_SCALE - (UNLOCK_SCALE - 1f) * p
+                home.scaleX = sc
+                home.scaleY = sc
+                home.alpha = (it.animatedFraction / 0.3f).coerceIn(0f, 1f)
+                if (Build.VERSION.SDK_INT >= 31) {
+                    val r = ((1f - p) * blurMax).toInt()
+                    if (r != unlockBlur) {
+                        unlockBlur = r
+                        home.setRenderEffect(
+                            if (r <= 0) null else RenderEffect.createBlurEffect(r.toFloat(), r.toFloat(), Shader.TileMode.CLAMP)
+                        )
+                    }
+                }
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                var cancelled = false
+                override fun onAnimationCancel(animation: Animator) { cancelled = true }
+                override fun onAnimationEnd(animation: Animator) {
+                    if (cancelled) return
+                    if (Build.VERSION.SDK_INT >= 31) home.setRenderEffect(null)
+                    home.setLayerType(View.LAYER_TYPE_NONE, null)
+                    home.scaleX = 1f; home.scaleY = 1f; home.alpha = 1f
+                }
+            })
+            start()
+        }
+    }
+
     // ---------- Expand-from-icon launch / shrink-back-to-icon return ----------
 
+    private val UNLOCK_SCALE = 1.4f
     private val openInterp = PathInterpolator(0.2f, 0f, 0f, 1f)
     private val closeInterp = PathInterpolator(0.3f, 0f, 0f, 1f)
 

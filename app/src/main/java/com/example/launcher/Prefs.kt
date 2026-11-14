@@ -75,6 +75,11 @@ class Prefs(context: Context) {
         const val DEFAULT_BLUR = 55
     }
 
+    /** Home screen zooms in (from big + blurry) when the phone is unlocked. */
+    var unlockAnim: Boolean
+        get() = sp.getBoolean("unlock_anim", true)
+        set(v) = sp.edit().putBoolean("unlock_anim", v).apply()
+
     /** Draw the translucent panel behind the dock icons. */
     var dockBackground: Boolean
         get() = sp.getBoolean("dock_background", true)
