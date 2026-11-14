@@ -5,7 +5,11 @@ import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.appwidget.AppWidgetHostView
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Rect
 import android.util.AttributeSet
 import android.util.TypedValue
 import android.view.Gravity
@@ -114,6 +118,18 @@ class HomeGridView @JvmOverloads constructor(
     private var edgeDir = 0
     private val longPress = Runnable { onLongPressFired() }
     private val edgeRun = Runnable { onEdgeDwell() }
+
+    // ----- multi-select -----
+    private val selected = LinkedHashSet<Entry>()
+    var isSelecting = false
+        private set
+    var onSelectionChanged: ((Int) -> Unit)? = null
+    private var groupDrag = false
+    private var gather = 1f
+    private var gatherAnim: ValueAnimator? = null
+    private val selPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val checkPath = Path()
+    private val tmpRect = Rect()
 
     val isDragging: Boolean get() = dragEntry != null
     val isPaging: Boolean get() = paging
@@ -269,6 +285,214 @@ class HomeGridView @JvmOverloads constructor(
         }
         pageAnim = anim
         anim.start()
+    }
+
+    // ---------- Multi-select ----------
+
+    fun startSelection(app: AppInfo) {
+        val e = entries.firstOrNull { it.item.kind == HomeItem.APP && it.item.app?.component == app.component } ?: return
+        beginSelection(e)
+    }
+
+    fun startSelection(item: HomeItem) {
+        val e = entries.firstOrNull { it.item === item } ?: return
+        beginSelection(e)
+    }
+
+    private fun beginSelection(e: Entry) {
+        if (e.item.kind == HomeItem.WIDGET) return
+        isSelecting = true
+        selected.clear()
+        selected.add(e)
+        invalidate()
+        onSelectionChanged?.invoke(selected.size)
+    }
+
+    fun clearSelection() {
+        if (!isSelecting) return
+        isSelecting = false
+        selected.clear()
+        groupDrag = false
+        invalidate()
+        onSelectionChanged?.invoke(0)
+    }
+
+    private fun toggleSelected(e: Entry) {
+        if (e.item.kind == HomeItem.WIDGET) return
+        if (!selected.remove(e)) selected.add(e)
+        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        invalidate()
+        onSelectionChanged?.invoke(selected.size)
+    }
+
+    /** Round check marks on the icons while selecting. */
+    override fun dispatchDraw(canvas: Canvas) {
+        super.dispatchDraw(canvas)
+        if (!isSelecting || dragEntry != null) return
+        val r = 10f * density
+        for (e in entries) {
+            if (e.item.kind == HomeItem.WIDGET) continue
+            val v = e.view
+            val icon = v.findViewById<View>(R.id.icon) ?: v
+            tmpRect.set(0, 0, icon.width, icon.height)
+            offsetDescendantRectToMyCoords(icon, tmpRect)
+            val cx = tmpRect.right + v.translationX - r * 0.5f
+            val cy = tmpRect.top + v.translationY + r * 0.5f
+            val on = selected.contains(e)
+            if (on) {
+                selPaint.style = Paint.Style.FILL
+                selPaint.color = Color.rgb(0x2D, 0x7F, 0xF9)
+                canvas.drawCircle(cx, cy, r, selPaint)
+                selPaint.style = Paint.Style.STROKE
+                selPaint.strokeWidth = 2f * density
+                selPaint.color = Color.WHITE
+                canvas.drawCircle(cx, cy, r, selPaint)
+                checkPath.reset()
+                checkPath.moveTo(cx - r * 0.42f, cy + r * 0.02f)
+                checkPath.lineTo(cx - r * 0.1f, cy + r * 0.34f)
+                checkPath.lineTo(cx + r * 0.46f, cy - r * 0.32f)
+                selPaint.strokeWidth = 2.2f * density
+                selPaint.strokeCap = Paint.Cap.ROUND
+                selPaint.strokeJoin = Paint.Join.ROUND
+                canvas.drawPath(checkPath, selPaint)
+            } else {
+                selPaint.style = Paint.Style.FILL
+                selPaint.color = Color.argb(70, 0, 0, 0)
+                canvas.drawCircle(cx, cy, r, selPaint)
+                selPaint.style = Paint.Style.STROKE
+                selPaint.strokeWidth = 2f * density
+                selPaint.color = Color.argb(220, 255, 255, 255)
+                canvas.drawCircle(cx, cy, r, selPaint)
+            }
+        }
+    }
+
+    private fun occupancyExcluding(page: Int, ex: Set<Entry>): BooleanArray {
+        val g = BooleanArray(cols * rows)
+        for (e in entries) {
+            if (e in ex) continue
+            val m = e.item
+            if (m.page != page) continue
+            mark(g, max(0, m.col), max(0, m.row), m.spanC, m.spanR)
+        }
+        return g
+    }
+
+    private fun finishGroupDrag(e: Entry, drop: Boolean) {
+        gatherAnim?.cancel()
+        val ordered = ArrayList<Entry>()
+        ordered.add(e)
+        for (g in selected) if (g !== e) ordered.add(g)
+
+        fun resetAll() {
+            for (g in ordered) {
+                g.view.animate().translationX(0f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(160L).start()
+            }
+            post { settleIfNeeded() }
+        }
+
+        if (!drop || !dragFar) {
+            groupDrag = false
+            resetAll()
+            invalidate()
+            return
+        }
+
+        val t = targetFor(e)
+        groupDrag = false
+        val other = t.other
+        val exSet: Set<Entry> = ordered.toSet()
+        val fromX = HashMap<Entry, Float>()
+        val fromY = HashMap<Entry, Float>()
+        for (g in ordered) {
+            fromX[g] = g.view.left + g.view.translationX
+            fromY[g] = g.view.top + g.view.translationY
+        }
+
+        // 1) Dropped on an app / folder: everything goes into a folder.
+        if (other != null && t.near && ordered.all { it.item.kind == HomeItem.APP }) {
+            val oi = other.item
+            val movedApps = ordered.mapNotNull { it.item.app }
+            val tf = oi.folder
+            if (oi.kind == HomeItem.FOLDER && tf != null) {
+                for (a in movedApps) if (tf.apps.none { it.component == a.component }) tf.apps.add(a)
+                for (g in ordered) { entries.remove(g); removeView(g.view) }
+                bindEntry(other)
+                clearSelection()
+                afterStructureChange()
+                return
+            }
+            val oa = oi.app
+            if (oi.kind == HomeItem.APP && oa != null) {
+                val list = ArrayList<AppInfo>()
+                list.add(oa)
+                for (a in movedApps) if (list.none { it.component == a.component }) list.add(a)
+                val fm = HomeItem(HomeItem.FOLDER, oi.page, oi.col, oi.row, folder = FolderData("Folder", list))
+                for (g in ordered) { entries.remove(g); removeView(g.view) }
+                entries.remove(other)
+                removeView(other.view)
+                val fe = makeEntry(fm)
+                if (fe != null) {
+                    entries.add(fe)
+                    fe.view.alpha = 0f
+                    fe.view.animate().alpha(1f).setDuration(180L).start()
+                }
+                clearSelection()
+                afterStructureChange()
+                return
+            }
+        }
+
+        // 2) Otherwise place them one after another, starting at the cell under the finger.
+        val grids = HashMap<Int, BooleanArray>()
+        fun gridOf(p: Int): BooleanArray = grids.getOrPut(p) { occupancyExcluding(p, exSet) }
+        val pageOrder = ArrayList<Int>()
+        pageOrder.add(t.page)
+        for (p in 0 until pageCount) if (p != t.page) pageOrder.add(p)
+        val startIdx = t.row * cols + t.col
+        val total = cols * rows
+
+        class Plan(val entry: Entry, val page: Int, val col: Int, val row: Int)
+        val plans = ArrayList<Plan>()
+        var extraPages = 0
+        for (g in ordered) {
+            var done = false
+            var pi = 0
+            while (!done) {
+                if (pi >= pageOrder.size) {
+                    if (pageCount + extraPages >= MAX_PAGES) break
+                    pageOrder.add(pageOrder.size)
+                    extraPages++
+                }
+                val p = pageOrder[pi]
+                val gr = gridOf(p)
+                val offset = if (pi == 0) startIdx else 0
+                for (k in 0 until total) {
+                    val i = (offset + k) % total
+                    if (!gr[i]) {
+                        gr[i] = true
+                        plans.add(Plan(g, p, i % cols, i / cols))
+                        done = true
+                        break
+                    }
+                }
+                pi++
+            }
+            if (!done) {
+                resetAll() // no room anywhere
+                return
+            }
+        }
+        pageCount += extraPages
+        for (pl in plans) {
+            val m = pl.entry.item
+            m.page = pl.page
+            m.col = pl.col
+            m.row = pl.row
+            glideInto(pl.entry, fromX[pl.entry] ?: 0f, fromY[pl.entry] ?: 0f)
+        }
+        clearSelection()
+        afterStructureChange()
     }
 
     // ---------- Placement helpers ----------
@@ -690,6 +914,7 @@ class HomeGridView @JvmOverloads constructor(
     }
 
     private fun handleTap(t: Entry) {
+        if (isSelecting) { toggleSelected(t); return }
         val icon = t.view.findViewById<View>(R.id.icon) ?: t.view
         val app = t.item.app
         when (t.item.kind) {
@@ -743,10 +968,18 @@ class HomeGridView @JvmOverloads constructor(
         longFired = true
         val e = touched
         if (e == null) {
-            if (!moved && !paging) onEmptyLongPress?.invoke()
+            if (!moved && !paging && !isSelecting) onEmptyLongPress?.invoke()
             return
         }
         if (moved || paging) return
+        if (isSelecting) {
+            if (e.item.kind == HomeItem.WIDGET) return
+            if (!selected.contains(e)) {
+                selected.add(e)
+                onSelectionChanged?.invoke(selected.size)
+            }
+        }
+        groupDrag = isSelecting
         dragEntry = e
         dragFar = false
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
@@ -759,6 +992,27 @@ class HomeGridView @JvmOverloads constructor(
         e.view.animate().scaleX(s).scaleY(s).setDuration(120L).start()
         grabDX = (downX + scrollX) - e.view.left
         grabDY = downY - e.view.top
+        if (groupDrag) {
+            // The other selected apps fly to the dragged one and travel as a stack.
+            for (g in selected) if (g !== e) {
+                g.view.bringToFront()
+                g.view.animate().scaleX(0.9f).scaleY(0.9f).setDuration(160L).start()
+            }
+            e.view.bringToFront()
+            gather = 0f
+            gatherAnim?.cancel()
+            gatherAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 220L
+                interpolator = DecelerateInterpolator()
+                addUpdateListener {
+                    gather = it.animatedValue as Float
+                    val d = dragEntry
+                    if (d != null) follow(d, lastX, lastY)
+                }
+                start()
+            }
+            invalidate()
+        }
     }
 
     private fun follow(e: Entry, x: Float, y: Float) {
@@ -767,8 +1021,20 @@ class HomeGridView @JvmOverloads constructor(
         if (!dragFar && (abs(x - downX) > slop || abs(y - downY) > slop)) dragFar = true
         e.view.translationX = (x + scrollX - grabDX) - e.view.left
         e.view.translationY = (y - grabDY) - e.view.top
+        if (groupDrag) {
+            val ax = e.view.left + e.view.translationX
+            val ay = e.view.top + e.view.translationY
+            var i = 0
+            for (g in selected) {
+                if (g === e) continue
+                i++
+                val off = min(i, 3) * 4f * density
+                g.view.translationX = (ax - g.view.left + off) * gather
+                g.view.translationY = (ay - g.view.top + off) * gather
+            }
+        }
         val app = e.item.app
-        if (e.item.kind == HomeItem.APP && app != null) onDragMove?.invoke(rawX, rawY)
+        if (!groupDrag && e.item.kind == HomeItem.APP && app != null) onDragMove?.invoke(rawX, rawY)
         updateHover(e)
         updateEdge(x)
     }
@@ -823,7 +1089,8 @@ class HomeGridView @JvmOverloads constructor(
         val localY = vy - paddingTop
         val tc = floor((localX + cellW / 2f) / cellW).toInt().coerceIn(0, max(0, cols - m.spanC))
         val tr = floor((localY + cellH / 2f) / cellH).toInt().coerceIn(0, max(0, rows - m.spanR))
-        val other = entryCovering(tp, tc, tr, e)
+        var other = entryCovering(tp, tc, tr, e)
+        if (groupDrag && other != null && selected.contains(other)) other = null
         var near = false
         if (other != null) {
             val ox = tp * width + paddingLeft + other.item.col * cellW + cellW / 2f
@@ -834,7 +1101,7 @@ class HomeGridView @JvmOverloads constructor(
     }
 
     private fun mergeable(dragged: Entry, other: Entry): Boolean =
-        dragged.item.kind == HomeItem.APP &&
+        (if (groupDrag) selected.all { it.item.kind == HomeItem.APP } else dragged.item.kind == HomeItem.APP) &&
             (other.item.kind == HomeItem.APP || other.item.kind == HomeItem.FOLDER)
 
     private fun updateHover(e: Entry) {
@@ -874,6 +1141,10 @@ class HomeGridView @JvmOverloads constructor(
         translationZ = 0f
         clearHover()
         onDragEnd?.invoke()
+        if (groupDrag) {
+            finishGroupDrag(e, drop)
+            return
+        }
         val view = e.view
         val m = e.item
         val icon = view.findViewById<View>(R.id.icon) ?: view

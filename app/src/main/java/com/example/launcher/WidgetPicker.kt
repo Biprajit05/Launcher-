@@ -25,7 +25,7 @@ object WidgetPicker {
 
     private fun appName(pm: PackageManager, info: AppWidgetProviderInfo): String =
         try {
-    pm.getApplicationInfo(info.provider.packageName, 0).loadLabel(pm).toString()
+            pm.getApplicationInfo(info.provider.packageName, 0).loadLabel(pm).toString()
         } catch (e: Exception) {
             info.provider.packageName
         }

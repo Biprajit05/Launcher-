@@ -223,8 +223,9 @@ class MainActivity : AppCompatActivity() {
         homeGrid.onFolderClick = { item, v -> openFolder(item, v) }
         homeGrid.onFolderMenu = { item, v -> showFolderMenu(item, v) }
         homeGrid.onWidgetMenu = { item, v -> showWidgetMenu(item, v) }
+        homeGrid.onSelectionChanged = { n -> updateSelectionPill(n) }
         homeGrid.onChanged = { items, pages -> prefs.setHomePages(HomeStore.encode(items, pages)) }
-        homeGrid.onPageScroll = { count, pos -> pageDots.set(count, pos) }
+        homeGrid.onPageScroll = { count, pos -> onHomePageScroll(count, pos) }
         homeGrid.widgetFactory = { id -> createWidgetView(id) }
         homeGrid.onWidgetGone = { id ->
             try { widgetHost.deleteAppWidgetId(id) } catch (e: Exception) { /* already gone */ }
@@ -350,14 +351,18 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
-        if (drawerOpen) animateDrawer(false) // Home button closes the drawer
+        if (folderOv != null) closeFolder()
+        else if (homeGrid.isSelecting) homeGrid.clearSelection()
+        else if (drawerOpen) animateDrawer(false) // Home button closes the drawer
         else if (homeGrid.currentPage != 0 && !homeGrid.isDragging) homeGrid.goToPage(0)
     }
 
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onBackPressed() {
-        // Never leave the launcher; only close the drawer.
-        if (drawerOpen) animateDrawer(false)
+        // Never leave the launcher; only close the folder / selection / drawer.
+        if (folderOv != null) closeFolder()
+        else if (homeGrid.isSelecting) homeGrid.clearSelection()
+        else if (drawerOpen) animateDrawer(false)
     }
 
     // ---------- Data ----------
@@ -698,6 +703,7 @@ class MainActivity : AppCompatActivity() {
         if (!onHome) main.add(AppPopup.Item(R.drawable.ic_pop_add, "Add to home") { addToHome(app) })
         val danger = ArrayList<AppPopup.Item>()
         if (onHome) {
+            main.add(AppPopup.Item(R.drawable.ic_pop_add, "Select multiple") { homeGrid.startSelection(app) })
             danger.add(AppPopup.Item(R.drawable.ic_pop_remove, "Remove from home", true) { homeGrid.removeApp(app) })
         }
         danger.add(AppPopup.Item(R.drawable.ic_pop_delete, "Uninstall", true) { uninstall(app) })
@@ -1216,38 +1222,137 @@ class MainActivity : AppCompatActivity() {
         getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(search.windowToken, 0)
     }
 
+    // ---------- Multi-select pill ----------
+
+    private var selPill: TextView? = null
+
+    private fun updateSelectionPill(n: Int) {
+        val rootGroup = root as ViewGroup
+        if (!homeGrid.isSelecting) {
+            selPill?.let { p -> p.animate().alpha(0f).setDuration(150L).withEndAction { rootGroup.removeView(p) }.start() }
+            selPill = null
+            return
+        }
+        val d = resources.displayMetrics.density
+        var pill = selPill
+        if (pill == null) {
+            pill = TextView(this)
+            pill.setTextColor(Color.WHITE)
+            pill.textSize = 14f
+            pill.gravity = Gravity.CENTER
+            pill.setPadding((18 * d).toInt(), (9 * d).toInt(), (18 * d).toInt(), (9 * d).toInt())
+            pill.background = GradientDrawable().apply {
+                setColor(Color.argb(0xE6, 0x1E, 0x20, 0x24))
+                cornerRadius = 40 * d
+            }
+            pill.elevation = 8 * d
+            pill.setOnClickListener { homeGrid.clearSelection() }
+            val lp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+            val inset = ViewCompat.getRootWindowInsets(root)?.getInsets(WindowInsetsCompat.Type.statusBars())?.top ?: (24 * d).toInt()
+            lp.topMargin = inset + (10 * d).toInt()
+            pill.alpha = 0f
+            rootGroup.addView(pill, lp)
+            pill.animate().alpha(1f).setDuration(150L).start()
+            selPill = pill
+        }
+        pill.text = if (n == 0) "Tap apps to select  \u2715" else "$n selected \u00B7 hold & drag to move  \u2715"
+    }
+
+    // ---------- Page dots <-> search pill ----------
+
+    private var lastDotPos = -1f
+    private var dotsShown = false
+    private val hideDots = Runnable { showDots(false) }
+
+    /** Dots appear (and the search pill fades out) only while the pages are moving. */
+    private fun onHomePageScroll(count: Int, pos: Float) {
+        pageDots.set(count, pos)
+        val moving = lastDotPos >= 0f && abs(pos - lastDotPos) > 0.0005f
+        lastDotPos = pos
+        if (count <= 1) {
+            ui.removeCallbacks(hideDots)
+            showDots(false)
+            return
+        }
+        if (moving) {
+            ui.removeCallbacks(hideDots)
+            showDots(true)
+            if (abs(pos - Math.round(pos)) < 0.002f) ui.postDelayed(hideDots, 450L)
+        }
+    }
+
+    private fun showDots(show: Boolean) {
+        if (show == dotsShown) return
+        dotsShown = show
+        val dur = 180L
+        pageDots.animate().cancel()
+        homeSearch.animate().cancel()
+        if (show) {
+            pageDots.visibility = View.VISIBLE
+            pageDots.animate().alpha(1f).setDuration(dur).start()
+            homeSearch.animate().alpha(0f).setDuration(dur)
+                .withEndAction { if (dotsShown) homeSearch.visibility = View.INVISIBLE }.start()
+        } else {
+            homeSearch.visibility = View.VISIBLE
+            homeSearch.animate().alpha(1f).setDuration(dur).start()
+            pageDots.animate().alpha(0f).setDuration(dur).start()
+        }
+    }
+
     // ---------- Folders ----------
 
+    private var folderOv: FrameLayout? = null
+    private var folderAnim: ValueAnimator? = null
+    private var folderIconView: View? = null
+    private var folderClosing = false
+
+    /** 0 = no blur, 1 = full blur behind the open folder (home + wallpaper). */
+    private fun applyFolderBlur(p: Float) {
+        if (Build.VERSION.SDK_INT < 31) return
+        val d = resources.displayMetrics.density
+        val r = p * 26f * d
+        home.setRenderEffect(
+            if (r < 1f) null else RenderEffect.createBlurEffect(r, r, Shader.TileMode.CLAMP)
+        )
+        try {
+            if (windowManager.isCrossWindowBlurEnabled) window.setBackgroundBlurRadius((p * 40f * d).toInt())
+        } catch (e: Exception) { /* not supported */ }
+    }
+
     private fun openFolder(item: HomeItem, folderIcon: View) {
+        if (folderOv != null) return
         val folder = item.folder ?: return
         val d = resources.displayMetrics.density
         val dm = resources.displayMetrics
-        val dialog = Dialog(this)
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val rootGroup = root as ViewGroup
 
+        val ov = FrameLayout(this)
+        ov.isClickable = true
+        ov.setOnClickListener { closeFolder() }
+
+        // No panel background: the icons float on the blurred home screen.
         val panel = LinearLayout(this)
         panel.orientation = LinearLayout.VERTICAL
+        panel.isClickable = true // taps on the panel itself don't close the folder
         panel.setPadding((16 * d).toInt(), (14 * d).toInt(), (16 * d).toInt(), (14 * d).toInt())
-        val bg = GradientDrawable()
-        bg.setColor(Color.argb(0xEE, 0x1E, 0x20, 0x24))
-        bg.setCornerRadius(28 * d)
-        panel.background = bg
 
         val title = TextView(this)
         title.text = folder.name
         title.setTextColor(Color.WHITE)
-        title.textSize = 18f
+        title.setShadowLayer(6f * d, 0f, 1f * d, Color.argb(120, 0, 0, 0))
+        title.textSize = 20f
         title.gravity = Gravity.CENTER
-        title.setPadding(0, (4 * d).toInt(), 0, (12 * d).toInt())
-        title.setOnClickListener { dialog.dismiss(); showRenameFolder(item) }
+        title.setPadding(0, (4 * d).toInt(), 0, (14 * d).toInt())
+        title.setOnClickListener { closeFolder(false); showRenameFolder(item) }
         panel.addView(title, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         val rv = RecyclerView(this)
         rv.layoutManager = GridLayoutManager(this, 3)
+        rv.overScrollMode = View.OVER_SCROLL_NEVER
         val adapter = AppAdapter(
             prefs, { 3 }, true, true,
-            { app, v -> folderLaunch(dialog, app, v, folderIcon) },
-            { app, _ -> showFolderAppMenu(dialog, item, app) }
+            { app, v -> folderLaunch(app, v, folderIcon) },
+            { app, _ -> showFolderAppMenu(item, app) }
         )
         adapter.submit(folder.apps.toList())
         rv.adapter = adapter
@@ -1255,36 +1360,107 @@ class MainActivity : AppCompatActivity() {
         val h = min((rowsNeeded * 104 * d).toInt(), (dm.heightPixels * 0.55f).toInt())
         panel.addView(rv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h))
 
-        dialog.setContentView(panel)
-        val win = dialog.window
-        if (win != null) {
-            win.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            win.setLayout((dm.widthPixels * 0.88f).toInt(), WindowManager.LayoutParams.WRAP_CONTENT)
-            win.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-            win.setDimAmount(0.4f)
+        ov.addView(panel, FrameLayout.LayoutParams((dm.widthPixels * 0.88f).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        rootGroup.addView(ov, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        folderOv = ov
+        folderIconView = folderIcon
+        folderClosing = false
+        hideKeyboard()
+
+        panel.alpha = 0f
+        ov.post {
+            // The panel grows out of the folder icon (same feel as opening an app).
+            val src = rectInRoot(folderIcon)
+            val startScale = (src.width() / panel.width.toFloat()).coerceIn(0.08f, 0.6f)
+            panel.pivotX = src.centerX() - panel.left
+            panel.pivotY = src.centerY() - panel.top
+            folderIcon.alpha = 0f
+            runFolderAnim(ov, panel, startScale, true)
         }
-        dialog.show()
     }
 
-    private fun folderLaunch(dialog: Dialog, app: AppInfo, tapped: View, folderIcon: View) {
+    private fun runFolderAnim(ov: FrameLayout, panel: View, startScale: Float, opening: Boolean, then: (() -> Unit)? = null) {
+        folderAnim?.cancel()
+        val from = if (opening) 0f else 1f
+        val to = if (opening) 1f else 0f
+        folderAnim = ValueAnimator.ofFloat(from, to).apply {
+            duration = ((if (opening) 380 else 330) * prefs.factor).toLong().coerceAtLeast(120L)
+            interpolator = if (opening) openInterp else closeInterp
+            addUpdateListener {
+                val p = it.animatedValue as Float
+                val sc = startScale + (1f - startScale) * p
+                panel.scaleX = sc
+                panel.scaleY = sc
+                panel.alpha = if (opening) (p / 0.5f).coerceIn(0f, 1f) else ((p - 0.05f) / 0.5f).coerceIn(0f, 1f)
+                ov.setBackgroundColor(Color.argb((0x38 * p).toInt(), 0, 0, 0))
+                applyFolderBlur(p)
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                var cancelled = false
+                override fun onAnimationCancel(animation: Animator) { cancelled = true }
+                override fun onAnimationEnd(animation: Animator) {
+                    if (cancelled) return
+                    if (!opening) { removeFolderOverlay(); then?.invoke() }
+                }
+            })
+            start()
+        }
+    }
+
+    /** Shrinks the folder back into its icon. animated = false closes at once. */
+    private fun closeFolder(animated: Boolean = true, then: (() -> Unit)? = null) {
+        val ov = folderOv ?: run { then?.invoke(); return }
+        if (folderClosing && animated) return
+        val panel = if (ov.childCount > 0) ov.getChildAt(0) else null
+        if (!animated || panel == null || panel.width <= 0) {
+            removeFolderOverlay()
+            then?.invoke()
+            return
+        }
+        folderClosing = true
+        // Re-aim at the icon (the grid may have moved while the folder was open).
+        folderIconView?.let {
+            val src = rectInRoot(it)
+            panel.pivotX = src.centerX() - panel.left
+            panel.pivotY = src.centerY() - panel.top
+        }
+        val startScale = ((folderIconView?.width ?: 1) / panel.width.toFloat()).coerceIn(0.08f, 0.6f)
+        runFolderAnim(ov, panel, startScale, false, then)
+    }
+
+    private fun removeFolderOverlay() {
+        folderAnim?.cancel()
+        folderAnim = null
+        folderOv?.let { (root as ViewGroup).removeView(it) }
+        folderOv = null
+        folderClosing = false
+        folderIconView?.alpha = 1f
+        folderIconView = null
+        if (Build.VERSION.SDK_INT >= 31) {
+            home.setRenderEffect(null)
+            try { window.setBackgroundBlurRadius(0) } catch (e: Exception) { /* ignore */ }
+        }
+    }
+
+    private fun folderLaunch(app: AppInfo, tapped: View, folderIcon: View) {
         if (prefs.style == 3) {
             // The app grows out of the icon that was tapped inside the folder.
             val rect = rectInRoot(tapped)
             val drawable = (tapped as? ImageView)?.drawable?.constantState?.newDrawable(resources)?.mutate()
-            dialog.dismiss()
+            closeFolder(false)
             launchFromRect(app, rect, drawable)
         } else {
-            dialog.dismiss()
+            closeFolder(false)
             launch(app, folderIcon)
         }
     }
 
-    private fun showFolderAppMenu(folderDialog: Dialog, item: HomeItem, app: AppInfo) {
+    private fun showFolderAppMenu(item: HomeItem, app: AppInfo) {
         val titles = arrayOf("Remove from folder", "Edit icon", "Rename", "App info", "Uninstall")
         AlertDialog.Builder(this)
             .setTitle(app.label)
             .setItems(titles) { _, which ->
-                folderDialog.dismiss()
+                closeFolder(false)
                 when (which) {
                     0 -> homeGrid.removeFromFolder(item, app)
                     1 -> showEditIcon(app)
@@ -1297,7 +1473,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showFolderMenu(item: HomeItem, anchor: View) {
-        val main = listOf(AppPopup.Item(R.drawable.ic_pop_edit, "Rename") { showRenameFolder(item) })
+        val main = listOf(
+            AppPopup.Item(R.drawable.ic_pop_edit, "Rename") { showRenameFolder(item) },
+            AppPopup.Item(R.drawable.ic_pop_add, "Select multiple") { homeGrid.startSelection(item) }
+        )
         val danger = listOf(AppPopup.Item(R.drawable.ic_pop_remove, "Ungroup folder", true) { homeGrid.ungroupFolder(item) })
         AppPopup(this).show(root, anchor, item.folder?.name ?: "Folder", listOf(main, danger), false) { }
     }

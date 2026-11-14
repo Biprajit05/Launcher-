@@ -29,15 +29,15 @@ class PageDots @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         if (count <= 1) return
-        val r = 3f * density
-        val gap = 14f * density
+        val r = 2.3f * density
+        val gap = 15f * density
         val startX = width / 2f - (count - 1) * gap / 2f
         val cy = height / 2f
         for (i in 0 until count) {
             val near = 1f - min(1f, abs(pos - i))
             paint.color = Color.WHITE
-            paint.alpha = (90 + 165 * near).toInt()
-            canvas.drawCircle(startX + i * gap, cy, r + near * 1.2f * density, paint)
+            paint.alpha = (100 + 155 * near).toInt()
+            canvas.drawCircle(startX + i * gap, cy, r + near * 0.5f * density, paint)
         }
     }
 }
