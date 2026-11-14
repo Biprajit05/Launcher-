@@ -20,6 +20,15 @@ class AppAdapter(
 ) : RecyclerView.Adapter<AppAdapter.VH>() {
 
     private var items: List<AppInfo> = emptyList()
+    private var textColor: Int? = null
+
+    /** Label colour for the app drawer (light/dark drawer background). */
+    @SuppressLint("NotifyDataSetChanged")
+    fun setTextColor(c: Int) {
+        if (textColor == c) return
+        textColor = c
+        notifyDataSetChanged()
+    }
 
     @SuppressLint("NotifyDataSetChanged")
     fun submit(list: List<AppInfo>) {
@@ -63,6 +72,7 @@ class AppAdapter(
         holder.itemView.scaleX = 1f
         holder.itemView.scaleY = 1f
         IconStyle.bindIcon(holder.icon, holder.label, app, prefs.shape, prefs.scale, columns(), prefs.labelScale)
+        if (!onWallpaper) textColor?.let { holder.label.setTextColor(it) }
     }
 
     override fun getItemCount() = items.size

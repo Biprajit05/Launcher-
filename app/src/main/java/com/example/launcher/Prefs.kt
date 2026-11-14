@@ -55,6 +55,26 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("dock_enabled", true)
         set(v) = sp.edit().putBoolean("dock_enabled", v).apply()
 
+    /** App drawer background colour: 0 = auto (follows the wallpaper), 1 = light, 2 = dark. */
+    var drawerColor: Int
+        get() = sp.getInt("drawer_color", 0)
+        set(v) = sp.edit().putInt("drawer_color", v).apply()
+
+    /** 0 = opaque .. 100 = transparent. */
+    var drawerTransparency: Int
+        get() = sp.getInt("drawer_transparency", DEFAULT_TRANSPARENCY)
+        set(v) = sp.edit().putInt("drawer_transparency", v).apply()
+
+    /** 0 = clear .. 100 = blurry. */
+    var drawerBlur: Int
+        get() = sp.getInt("drawer_blur", DEFAULT_BLUR)
+        set(v) = sp.edit().putInt("drawer_blur", v).apply()
+
+    companion object {
+        const val DEFAULT_TRANSPARENCY = 85
+        const val DEFAULT_BLUR = 55
+    }
+
     /** Draw the translucent panel behind the dock icons. */
     var dockBackground: Boolean
         get() = sp.getBoolean("dock_background", true)

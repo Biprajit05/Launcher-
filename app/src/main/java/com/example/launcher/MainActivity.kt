@@ -10,6 +10,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
+import android.app.WallpaperColors
+import android.app.WallpaperManager
 import android.graphics.Color
 import android.graphics.RectF
 import android.net.Uri
@@ -104,6 +106,8 @@ class MainActivity : AppCompatActivity() {
     // "Expand window from icon" launch animation
     private var blurOn = false
     private var lastBlur = -1
+    private var blurMaxPx = 0f
+    private var drawerLight = true
     private var launchOv: LaunchOverlay? = null
     private var ovAnim: ValueAnimator? = null
     private var ovOpening = false
@@ -219,10 +223,8 @@ class MainActivity : AppCompatActivity() {
 
     /** Dark status/nav icons only when the light drawer is on screen. */
     private fun updateBars(drawerShown: Boolean) {
-        val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-            Configuration.UI_MODE_NIGHT_YES
         val c = WindowInsetsControllerCompat(window, root)
-        val light = drawerShown && !night
+        val light = drawerShown && drawerLight
         c.isAppearanceLightStatusBars = light
         c.isAppearanceLightNavigationBars = light
     }
@@ -248,7 +250,7 @@ class MainActivity : AppCompatActivity() {
             if (ovOpening) closeWhenOpened = true else closeLaunchOverlay()
         }
         updateBars(drawerOpen)
-        refreshBlur()
+        applyDrawerStyle()
         if (allApps.isNotEmpty()) {
             dockApps = resolveDock(applicationContext, allApps) // pick up changes from Settings
             bind()
@@ -831,7 +833,7 @@ class MainActivity : AppCompatActivity() {
         val p = 1f - t / range
         drawer.alpha = p
         if (blurOn && Build.VERSION.SDK_INT >= 31) {
-            val r = (p * 80 * resources.displayMetrics.density).toInt()
+            val r = (p * blurMaxPx).toInt()
             if (r != lastBlur) {
                 lastBlur = r
                 window.setBackgroundBlurRadius(r)
@@ -842,16 +844,49 @@ class MainActivity : AppCompatActivity() {
         home.alpha = 1f - p
     }
 
-    /** Blurred, see-through drawer where the device supports window blur; plain solid drawer otherwise. */
-    private fun refreshBlur() {
+    private fun systemIsNight() =
+        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+
+    /** Auto mode: light drawer on a light wallpaper, dark drawer on a dark one. */
+    private fun wallpaperIsLight(): Boolean {
+        if (Build.VERSION.SDK_INT >= 31) {
+            try {
+                val c = WallpaperManager.getInstance(this).getWallpaperColors(WallpaperManager.FLAG_SYSTEM)
+                if (c != null) return (c.colorHints and WallpaperColors.HINT_SUPPORTS_DARK_TEXT) != 0
+            } catch (e: Exception) { /* fall through */ }
+        }
+        return !systemIsNight()
+    }
+
+    /** Drawer look from the settings: colour (auto/light/dark), transparency and blur. */
+    private fun applyDrawerStyle() {
         blurOn = Build.VERSION.SDK_INT >= 31 && windowManager.isCrossWindowBlurEnabled
-        drawer.setBackgroundColor(
-            ContextCompat.getColor(this, if (blurOn) R.color.drawer_bg_blur else R.color.drawer_bg)
-        )
-        if (!blurOn && Build.VERSION.SDK_INT >= 31 && lastBlur != 0) {
+        drawerLight = when (prefs.drawerColor) {
+            1 -> true
+            2 -> false
+            else -> wallpaperIsLight()
+        }
+        // transparency 0 (opaque) .. 100 (transparent) -> tint opacity 96% .. 10%
+        var alpha = 0.96f - (0.96f - 0.10f) * (prefs.drawerTransparency / 100f)
+        if (!blurOn) alpha = max(alpha, 0.88f) // no blur available: keep it readable
+        val base = if (drawerLight) Color.rgb(0xF2, 0xF2, 0xF7) else Color.rgb(0x14, 0x14, 0x16)
+        drawer.setBackgroundColor(Color.argb((alpha * 255).toInt(), Color.red(base), Color.green(base), Color.blue(base)))
+        blurMaxPx = if (blurOn) prefs.drawerBlur / 100f * 150f * resources.displayMetrics.density else 0f
+        if (Build.VERSION.SDK_INT >= 31 && !drawerOpen && lastBlur != 0) {
             lastBlur = 0
             window.setBackgroundBlurRadius(0)
         }
+
+        val text = if (drawerLight) Color.rgb(0x1C, 0x1C, 0x1E) else Color.WHITE
+        val hint = if (drawerLight) Color.argb(0xB0, 0x3A, 0x3A, 0x3C) else Color.argb(0xB3, 0xFF, 0xFF, 0xFF)
+        drawerAdapter.setTextColor(text)
+        rail.setColors(hint, text)
+        search.setTextColor(text)
+        search.setHintTextColor(hint)
+        search.background?.mutate()?.setTint(
+            if (drawerLight) Color.argb(0x26, 0, 0, 0) else Color.argb(0x33, 0xFF, 0xFF, 0xFF)
+        )
+        updateBars(drawerOpen)
     }
 
     private fun layers(on: Boolean) {

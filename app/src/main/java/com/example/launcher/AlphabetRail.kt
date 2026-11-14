@@ -22,6 +22,14 @@ class AlphabetRail @JvmOverloads constructor(
         color = ctx.getColor(R.color.hint)
     }
     private var active = -1
+    private var normalColor = ctx.getColor(R.color.hint)
+    private var activeColor = ctx.getColor(R.color.label)
+
+    fun setColors(normal: Int, activeC: Int) {
+        normalColor = normal
+        activeColor = activeC
+        invalidate()
+    }
 
     /** Called with the letter ("#" or "A".."Z") and its centre Y in this view; done = finger lifted. */
     var onLetter: ((letter: String, centerY: Float, done: Boolean) -> Unit)? = null
@@ -31,7 +39,7 @@ class AlphabetRail @JvmOverloads constructor(
         val step = h / letters.size
         paint.textSize = (step * 0.62f).coerceAtMost(9f * resources.displayMetrics.scaledDensity)
         for (i in letters.indices) {
-            paint.color = if (i == active) ctx().getColor(R.color.label) else ctx().getColor(R.color.hint)
+            paint.color = if (i == active) activeColor else normalColor
             paint.isFakeBoldText = i == active
             val y = step * i + step / 2f - (paint.ascent() + paint.descent()) / 2f
             canvas.drawText(letters[i], width / 2f, y, paint)
