@@ -102,6 +102,8 @@ class MainActivity : AppCompatActivity() {
     private val executor = Executors.newSingleThreadExecutor()
 
     // "Expand window from icon" launch animation
+    private var blurOn = false
+    private var lastBlur = -1
     private var launchOv: LaunchOverlay? = null
     private var ovAnim: ValueAnimator? = null
     private var ovOpening = false
@@ -134,6 +136,14 @@ class MainActivity : AppCompatActivity() {
         rail = findViewById(R.id.rail)
         railBubble = findViewById(R.id.railBubble)
         rail.onLetter = { letter, cy, done -> onRailLetter(letter, cy, done) }
+        // The A-Z strip only spans the middle ~56% of the drawer height.
+        (rail.parent as View).addOnLayoutChangeListener { _, _, t, _, b, _, _, _, _ ->
+            val h = ((b - t) * 0.56f).toInt()
+            if (h > 0 && rail.layoutParams.height != h) {
+                rail.layoutParams.height = h
+                rail.requestLayout()
+            }
+        }
         homeSearch.setOnClickListener { openDrawerForSearch() }
 
         val menuFromList: (AppInfo, View) -> Unit = { a, v -> showAppMenu(a, v, false) }
@@ -164,9 +174,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Full screen: draw behind the status + navigation bars and pad content instead.
-        val sidePad = (8 * resources.displayMetrics.density).toInt()
+        val sidePad = (20 * resources.displayMetrics.density).toInt()
         val listBottom = (8 * resources.displayMetrics.density).toInt()
-        val railW = (22 * resources.displayMetrics.density).toInt()
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
@@ -176,7 +185,7 @@ class MainActivity : AppCompatActivity() {
             drawer.setPadding(bars.left, bars.top, bars.right, max(bars.bottom, ime.bottom))
             drawerList.updatePadding(
                 left = sidePad,
-                right = sidePad + railW,
+                right = sidePad,
                 top = listBottom,
                 bottom = listBottom
             )
@@ -239,6 +248,7 @@ class MainActivity : AppCompatActivity() {
             if (ovOpening) closeWhenOpened = true else closeLaunchOverlay()
         }
         updateBars(drawerOpen)
+        refreshBlur()
         if (allApps.isNotEmpty()) {
             dockApps = resolveDock(applicationContext, allApps) // pick up changes from Settings
             bind()
@@ -820,9 +830,28 @@ class MainActivity : AppCompatActivity() {
         drawer.translationY = t
         val p = 1f - t / range
         drawer.alpha = p
+        if (blurOn && Build.VERSION.SDK_INT >= 31) {
+            val r = (p * 80 * resources.displayMetrics.density).toInt()
+            if (r != lastBlur) {
+                lastBlur = r
+                window.setBackgroundBlurRadius(r)
+            }
+        }
         val s = 1f - 0.06f * p
         home.scaleX = s; home.scaleY = s
         home.alpha = 1f - p
+    }
+
+    /** Blurred, see-through drawer where the device supports window blur; plain solid drawer otherwise. */
+    private fun refreshBlur() {
+        blurOn = Build.VERSION.SDK_INT >= 31 && windowManager.isCrossWindowBlurEnabled
+        drawer.setBackgroundColor(
+            ContextCompat.getColor(this, if (blurOn) R.color.drawer_bg_blur else R.color.drawer_bg)
+        )
+        if (!blurOn && Build.VERSION.SDK_INT >= 31 && lastBlur != 0) {
+            lastBlur = 0
+            window.setBackgroundBlurRadius(0)
+        }
     }
 
     private fun layers(on: Boolean) {

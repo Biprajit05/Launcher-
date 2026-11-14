@@ -18,7 +18,7 @@ class AlphabetRail @JvmOverloads constructor(
     private val letters = listOf("#") + ('A'..'Z').map { it.toString() }
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.CENTER
-        typeface = Typeface.DEFAULT_BOLD
+        typeface = Typeface.DEFAULT
         color = ctx.getColor(R.color.hint)
     }
     private var active = -1
@@ -29,9 +29,10 @@ class AlphabetRail @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         val h = height.toFloat()
         val step = h / letters.size
-        paint.textSize = (step * 0.62f).coerceAtMost(11f * resources.displayMetrics.scaledDensity)
+        paint.textSize = (step * 0.62f).coerceAtMost(9f * resources.displayMetrics.scaledDensity)
         for (i in letters.indices) {
             paint.color = if (i == active) ctx().getColor(R.color.label) else ctx().getColor(R.color.hint)
+            paint.isFakeBoldText = i == active
             val y = step * i + step / 2f - (paint.ascent() + paint.descent()) / 2f
             canvas.drawText(letters[i], width / 2f, y, paint)
         }
