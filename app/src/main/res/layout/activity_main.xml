@@ -53,12 +53,15 @@
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/dock"
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
             android:layout_marginStart="12dp"
             android:layout_marginEnd="12dp"
             android:layout_marginBottom="0dp"
             android:background="@drawable/dock_bg"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:padding="6dp" />
     </LinearLayout>
 
