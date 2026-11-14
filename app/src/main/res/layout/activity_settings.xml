@@ -63,6 +63,40 @@
         </RadioGroup>
 
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" android:text="App drawer background" android:textSize="16sp" android:textStyle="bold" />
+        <RadioGroup android:id="@+id/drawerColorGroup" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <RadioButton android:id="@+id/dcAuto" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Auto (match wallpaper)" />
+            <RadioButton android:id="@+id/dcLight" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Light" />
+            <RadioButton android:id="@+id/dcDark" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Dark" />
+        </RadioGroup>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:id="@+id/transLabel" android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:text="Transparency effect: 85%" android:textSize="15sp" />
+            <Button android:id="@+id/transRestore" style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Restore" />
+        </LinearLayout>
+        <SeekBar android:id="@+id/transBar" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Opaque" android:textSize="12sp" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Transparent" android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:id="@+id/blurLabel" android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:text="Blur effect: 55%" android:textSize="15sp" />
+            <Button android:id="@+id/blurRestore" style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Restore" />
+        </LinearLayout>
+        <SeekBar android:id="@+id/blurBar" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Clear" android:textSize="12sp" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Blurry" android:textSize="12sp" />
+        </LinearLayout>
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:layout_marginTop="24dp" android:text="Dock" android:textSize="16sp" android:textStyle="bold" />
         <androidx.appcompat.widget.SwitchCompat android:id="@+id/dockSwitch"
             android:layout_width="match_parent" android:layout_height="wrap_content"
