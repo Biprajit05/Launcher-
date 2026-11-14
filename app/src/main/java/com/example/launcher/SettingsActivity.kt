@@ -69,6 +69,10 @@ class SettingsActivity : AppCompatActivity() {
             isChecked = p.dockEnabled
             setOnCheckedChangeListener { _, checked -> p.dockEnabled = checked }
         }
+        findViewById<SwitchCompat>(R.id.dockBgSwitch).apply {
+            isChecked = p.dockBackground
+            setOnCheckedChangeListener { _, checked -> p.dockBackground = checked }
+        }
         findViewById<Button>(R.id.resetDock).setOnClickListener {
             p.setDock(null)
             Toast.makeText(this, "Dock reset", Toast.LENGTH_SHORT).show()

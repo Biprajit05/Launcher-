@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
+import android.graphics.Color
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
@@ -194,6 +195,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupWindow() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
         if (Build.VERSION.SDK_INT >= 28) {
             val lp = window.attributes
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
@@ -297,6 +300,7 @@ class MainActivity : AppCompatActivity() {
     private fun bind() {
         val cols = prefs.columns
         dock.visibility = if (prefs.dockEnabled) View.VISIBLE else View.GONE
+        if (prefs.dockBackground) dock.setBackgroundResource(R.drawable.dock_bg) else dock.background = null
         (drawerList.layoutManager as GridLayoutManager).spanCount = cols
         dockAdapter.submit(dockApps)
         homeGrid.configure(prefs.homeCols, prefs.homeRows, prefs.scale, prefs.shape, prefs.labelScale)

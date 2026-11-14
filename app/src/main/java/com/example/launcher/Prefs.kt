@@ -55,6 +55,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("dock_enabled", true)
         set(v) = sp.edit().putBoolean("dock_enabled", v).apply()
 
+    /** Draw the translucent panel behind the dock icons. */
+    var dockBackground: Boolean
+        get() = sp.getBoolean("dock_background", true)
+        set(v) = sp.edit().putBoolean("dock_background", v).apply()
+
     /** Saved dock apps as "component|component|...". null = default dock. */
     fun getDock(): String? = sp.getString("dock_apps", null)
 
