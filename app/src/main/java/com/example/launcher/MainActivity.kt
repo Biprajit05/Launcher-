@@ -4,6 +4,17 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.app.ActivityOptions
+import android.app.Dialog
+import android.appwidget.AppWidgetHost
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProviderInfo
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.view.Window
+import android.widget.LinearLayout
+import android.widget.SeekBar
+import kotlin.math.ceil
 import android.app.KeyguardManager
 import android.graphics.RenderEffect
 import android.graphics.Shader
@@ -74,6 +85,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var drawerList: RecyclerView
     private lateinit var search: EditText
     private lateinit var homeSearch: View
+    private lateinit var pageDots: PageDots
+    private lateinit var widgetHost: AppWidgetHost
+    private lateinit var widgetManager: AppWidgetManager
+    private var pendingWidgetId = -1
+    private var pendingProvider: AppWidgetProviderInfo? = null
     private lateinit var rail: AlphabetRail
     private lateinit var railBubble: TextView
     private var shownApps: List<AppInfo> = emptyList()
@@ -169,6 +185,9 @@ class MainActivity : AppCompatActivity() {
         drawerList = findViewById(R.id.drawerList)
         search = findViewById(R.id.search)
         homeSearch = findViewById(R.id.homeSearch)
+        pageDots = findViewById(R.id.pageDots)
+        widgetManager = AppWidgetManager.getInstance(this)
+        widgetHost = AppWidgetHost(applicationContext, WIDGET_HOST_ID)
         rail = findViewById(R.id.rail)
         railBubble = findViewById(R.id.railBubble)
         rail.onLetter = { letter, cy, done -> onRailLetter(letter, cy, done) }
@@ -201,7 +220,15 @@ class MainActivity : AppCompatActivity() {
         homeGrid.onAppClick = { app, v -> launch(app, v) }
         homeGrid.onAppMenu = { app, v -> showAppMenu(app, v, true) }
         homeGrid.onEmptyLongPress = { if (!drawerOpen) showHomeMenu() }
-        homeGrid.onChanged = { items -> prefs.setHomeLayout(encode(items)) }
+        homeGrid.onFolderClick = { item, v -> openFolder(item, v) }
+        homeGrid.onFolderMenu = { item, v -> showFolderMenu(item, v) }
+        homeGrid.onWidgetMenu = { item, v -> showWidgetMenu(item, v) }
+        homeGrid.onChanged = { items, pages -> prefs.setHomePages(HomeStore.encode(items, pages)) }
+        homeGrid.onPageScroll = { count, pos -> pageDots.set(count, pos) }
+        homeGrid.widgetFactory = { id -> createWidgetView(id) }
+        homeGrid.onWidgetGone = { id ->
+            try { widgetHost.deleteAppWidgetId(id) } catch (e: Exception) { /* already gone */ }
+        }
         homeGrid.onDragMove = { x, y -> setHover(dockSlotAt(x, y)) }
         homeGrid.onDragEnd = { setHover(-1) }
         homeGrid.onDropOutside = { app, x, y ->
@@ -266,6 +293,16 @@ class MainActivity : AppCompatActivity() {
         c.isAppearanceLightNavigationBars = light
     }
 
+    override fun onStart() {
+        super.onStart()
+        try { widgetHost.startListening() } catch (e: Exception) { /* widgets just won't live-update */ }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        try { widgetHost.stopListening() } catch (e: Exception) { /* ignore */ }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(pkgReceiver)
@@ -301,7 +338,7 @@ class MainActivity : AppCompatActivity() {
         if (iconsChanged) refreshIcons()
         if (allApps.isNotEmpty() && !iconsChanged) {
             dockApps = resolveDock(applicationContext, allApps) // pick up changes from Settings
-            bind()
+            bind(false)
         }
         if (drawerAnim?.isRunning != true && !unlockPending && unlockAnim?.isRunning != true) {
             val s = if (drawerOpen) 0.94f else 1f
@@ -314,6 +351,7 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         if (drawerOpen) animateDrawer(false) // Home button closes the drawer
+        else if (homeGrid.currentPage != 0 && !homeGrid.isDragging) homeGrid.goToPage(0)
     }
 
     @Suppress("OVERRIDE_DEPRECATION")
@@ -358,14 +396,17 @@ class MainActivity : AppCompatActivity() {
         return out.take(4)
     }
 
-    private fun bind() {
+    private fun bind(resetHome: Boolean = true) {
         val cols = prefs.columns
         dock.visibility = if (prefs.dockEnabled) View.VISIBLE else View.GONE
         if (prefs.dockBackground) dock.setBackgroundResource(R.drawable.dock_bg) else dock.background = null
         (drawerList.layoutManager as GridLayoutManager).spanCount = cols
         dockAdapter.submit(dockApps)
         homeGrid.configure(prefs.homeCols, prefs.homeRows, prefs.scale, prefs.shape, prefs.labelScale)
-        homeGrid.setItems(homeItems(prefs.homeCols, prefs.homeRows))
+        if (resetHome) {
+            val h = loadHome()
+            homeGrid.setItems(h.items, h.pages)
+        }
         applyFilter(search.text.toString())
     }
 
@@ -376,32 +417,19 @@ class MainActivity : AppCompatActivity() {
         rail.visibility = if (t.isEmpty()) View.VISIBLE else View.INVISIBLE
     }
 
-    // ---------- Home layout (saved as "component,col,row|component,col,row") ----------
+    // ---------- Home layout (pages, folders, widgets are saved by HomeStore) ----------
 
-    private fun homeItems(cols: Int, rows: Int): List<HomeItem> {
-        val saved = prefs.getHomeLayout()
-        if (saved != null) return decode(saved)
+    private fun loadHome(): HomeStore.Decoded {
+        val saved = prefs.getHomePages()
+        if (saved != null) return HomeStore.decode(saved, allApps)
+        val old = prefs.getHomeLayout()
+        if (old != null) return HomeStore.Decoded(HomeStore.migrate(old, allApps), 1)
+        val cols = prefs.homeCols
+        val rows = prefs.homeRows
         val dockPkgs = if (prefs.dockEnabled) dockApps.map { it.packageName }.toSet() else emptySet()
         val first = allApps.filter { it.packageName !in dockPkgs }.take(cols * minOf(rows, 5))
-        return first.mapIndexed { i, a -> HomeItem(a, i % cols, i / cols) }
-    }
-
-    private fun encode(items: List<HomeItem>): String =
-        items.joinToString("|") { "${it.app.component.flattenToString()},${it.col},${it.row}" }
-
-    private fun decode(s: String): List<HomeItem> {
-        val out = ArrayList<HomeItem>()
-        if (s.isEmpty()) return out
-        for (part in s.split("|")) {
-            val f = part.split(",")
-            if (f.size != 3) continue
-            val comp = ComponentName.unflattenFromString(f[0]) ?: continue
-            val app = allApps.firstOrNull { it.component == comp } ?: continue
-            val c = f[1].toIntOrNull() ?: continue
-            val r = f[2].toIntOrNull() ?: continue
-            out.add(HomeItem(app, c, r))
-        }
-        return out
+        val items = first.mapIndexed { i, a -> HomeItem(HomeItem.APP, 0, i % cols, i / cols, app = a) }
+        return HomeStore.Decoded(items, 1)
     }
 
     // ---------- Launch ----------
@@ -529,7 +557,20 @@ class MainActivity : AppCompatActivity() {
         return 28 * resources.displayMetrics.density
     }
 
-    private fun expandLaunch(app: AppInfo, intent: Intent, iconView: View) {
+    private fun expandLaunch(app: AppInfo, intent: Intent, iconView: View) =
+        expandLaunchCore(app, intent, rectInRoot(iconView), (iconView as? ImageView)?.drawable)
+
+    /** Same as a normal launch, but the window grows out of a given rectangle (used by folders). */
+    private fun launchFromRect(app: AppInfo, rect: RectF, drawable: Drawable?) {
+        if (launchOv != null && !ovClosing) return
+        val intent = Intent(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_LAUNCHER)
+            .setComponent(app.component)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        expandLaunchCore(app, intent, rect, drawable)
+    }
+
+    private fun expandLaunchCore(app: AppInfo, intent: Intent, src: RectF, iconDrawable: Drawable?) {
         removeLaunchOverlay() // clear a previous overlay that is still shrinking
         val density = resources.displayMetrics.density
         val w = root.width.toFloat()
@@ -538,7 +579,6 @@ class MainActivity : AppCompatActivity() {
             try { startActivity(intent) } catch (e: Exception) { cantOpen(app) }
             return
         }
-        val src = rectInRoot(iconView)
         val ov = LaunchOverlay(this).apply {
             from.set(src)
             to.set(0f, 0f, w, h)
@@ -547,8 +587,7 @@ class MainActivity : AppCompatActivity() {
             iconFrom = min(src.width(), src.height())
             iconTo = min(w * 0.26f, 110 * density)
             fillColor = ContextCompat.getColor(this@MainActivity, R.color.splash_bg)
-            val d = (iconView as? ImageView)?.drawable
-            icon = d?.constantState?.newDrawable(resources)?.mutate() ?: d ?: app.icon
+            icon = iconDrawable?.constantState?.newDrawable(resources)?.mutate() ?: iconDrawable ?: app.icon
             progress = 0f
         }
         (root as ViewGroup).addView(ov, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -800,9 +839,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun showHomeMenu() {
         PopupMenu(this, homeGrid, Gravity.CENTER).apply {
-            menu.add(0, 1, 0, R.string.settings)
+            menu.add(0, 2, 0, "Widgets")
+            menu.add(0, 1, 1, R.string.settings)
             setOnMenuItemClickListener {
-                startActivity(Intent(this@MainActivity, SettingsActivity::class.java)); true
+                when (it.itemId) {
+                    2 -> showWidgetPicker()
+                    else -> startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+                }
+                true
             }
             show()
         }
@@ -984,6 +1028,7 @@ class MainActivity : AppCompatActivity() {
             vt?.recycle(); vt = VelocityTracker.obtain()
             downX = ev.x; downY = ev.y
             tracking = true; dragging = false
+            homeGrid.touchOnWidget = false
         }
         vt?.addMovement(ev)
 
@@ -998,8 +1043,9 @@ class MainActivity : AppCompatActivity() {
         if (tracking && a == MotionEvent.ACTION_MOVE) {
             val dx = ev.x - downX
             val dy = ev.y - downY
-            if (abs(dy) > slop && abs(dy) > abs(dx)) {
-                val canOpen = !drawerOpen && dy < 0
+            if (abs(dy) > slop && abs(dy) > abs(dx) && !homeGrid.isPaging) {
+                // A swipe that starts on a widget belongs to the widget (so lists inside it can scroll).
+                val canOpen = !drawerOpen && dy < 0 && !homeGrid.touchOnWidget
                 val canClose = drawerOpen && dy > 0 && !drawerList.canScrollVertically(-1)
                 if (canOpen || canClose) {
                     startDrag(ev)
@@ -1168,5 +1214,284 @@ class MainActivity : AppCompatActivity() {
     private fun hideKeyboard() {
         search.clearFocus()
         getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(search.windowToken, 0)
+    }
+
+    // ---------- Folders ----------
+
+    private fun openFolder(item: HomeItem, folderIcon: View) {
+        val folder = item.folder ?: return
+        val d = resources.displayMetrics.density
+        val dm = resources.displayMetrics
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+
+        val panel = LinearLayout(this)
+        panel.orientation = LinearLayout.VERTICAL
+        panel.setPadding((16 * d).toInt(), (14 * d).toInt(), (16 * d).toInt(), (14 * d).toInt())
+        val bg = GradientDrawable()
+        bg.setColor(Color.argb(0xEE, 0x1E, 0x20, 0x24))
+        bg.setCornerRadius(28 * d)
+        panel.background = bg
+
+        val title = TextView(this)
+        title.text = folder.name
+        title.setTextColor(Color.WHITE)
+        title.textSize = 18f
+        title.gravity = Gravity.CENTER
+        title.setPadding(0, (4 * d).toInt(), 0, (12 * d).toInt())
+        title.setOnClickListener { dialog.dismiss(); showRenameFolder(item) }
+        panel.addView(title, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        val rv = RecyclerView(this)
+        rv.layoutManager = GridLayoutManager(this, 3)
+        val adapter = AppAdapter(
+            prefs, { 3 }, true, true,
+            { app, v -> folderLaunch(dialog, app, v, folderIcon) },
+            { app, _ -> showFolderAppMenu(dialog, item, app) }
+        )
+        adapter.submit(folder.apps.toList())
+        rv.adapter = adapter
+        val rowsNeeded = (folder.apps.size + 2) / 3
+        val h = min((rowsNeeded * 104 * d).toInt(), (dm.heightPixels * 0.55f).toInt())
+        panel.addView(rv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h))
+
+        dialog.setContentView(panel)
+        val win = dialog.window
+        if (win != null) {
+            win.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            win.setLayout((dm.widthPixels * 0.88f).toInt(), WindowManager.LayoutParams.WRAP_CONTENT)
+            win.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            win.setDimAmount(0.4f)
+        }
+        dialog.show()
+    }
+
+    private fun folderLaunch(dialog: Dialog, app: AppInfo, tapped: View, folderIcon: View) {
+        if (prefs.style == 3) {
+            // The app grows out of the icon that was tapped inside the folder.
+            val rect = rectInRoot(tapped)
+            val drawable = (tapped as? ImageView)?.drawable?.constantState?.newDrawable(resources)?.mutate()
+            dialog.dismiss()
+            launchFromRect(app, rect, drawable)
+        } else {
+            dialog.dismiss()
+            launch(app, folderIcon)
+        }
+    }
+
+    private fun showFolderAppMenu(folderDialog: Dialog, item: HomeItem, app: AppInfo) {
+        val titles = arrayOf("Remove from folder", "Edit icon", "Rename", "App info", "Uninstall")
+        AlertDialog.Builder(this)
+            .setTitle(app.label)
+            .setItems(titles) { _, which ->
+                folderDialog.dismiss()
+                when (which) {
+                    0 -> homeGrid.removeFromFolder(item, app)
+                    1 -> showEditIcon(app)
+                    2 -> showRenameDialog(app)
+                    3 -> openAppInfo(app)
+                    4 -> uninstall(app)
+                }
+            }
+            .show()
+    }
+
+    private fun showFolderMenu(item: HomeItem, anchor: View) {
+        val main = listOf(AppPopup.Item(R.drawable.ic_pop_edit, "Rename") { showRenameFolder(item) })
+        val danger = listOf(AppPopup.Item(R.drawable.ic_pop_remove, "Ungroup folder", true) { homeGrid.ungroupFolder(item) })
+        AppPopup(this).show(root, anchor, item.folder?.name ?: "Folder", listOf(main, danger), false) { }
+    }
+
+    private fun showRenameFolder(item: HomeItem) {
+        val folder = item.folder ?: return
+        val builder = AlertDialog.Builder(this)
+        val ctx = builder.context
+        val d = resources.displayMetrics.density
+        val input = EditText(ctx)
+        input.setSingleLine()
+        input.setText(folder.name)
+        input.setSelection(input.text.length)
+        val box = FrameLayout(ctx)
+        box.setPadding((20 * d).toInt(), (8 * d).toInt(), (20 * d).toInt(), 0)
+        box.addView(input, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        val dialog = builder
+            .setTitle("Folder name")
+            .setView(box)
+            .setPositiveButton("Save") { _, _ ->
+                val t = input.text.toString().trim()
+                folder.name = if (t.isEmpty()) "Folder" else t
+                homeGrid.refreshItem(item)
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        dialog.show()
+        input.requestFocus()
+    }
+
+    // ---------- Widgets ----------
+
+    private fun createWidgetView(id: Int): View? {
+        return try {
+            val info = widgetManager.getAppWidgetInfo(id) ?: return null
+            widgetHost.createView(this, id, info)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun showWidgetPicker() {
+        WidgetPicker.show(this) { info -> startAddWidget(info) }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun startAddWidget(info: AppWidgetProviderInfo) {
+        val id = try {
+            widgetHost.allocateAppWidgetId()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Can't add widgets here", Toast.LENGTH_SHORT).show()
+            return
+        }
+        pendingWidgetId = id
+        pendingProvider = info
+        val bound = try {
+            widgetManager.bindAppWidgetIdIfAllowed(id, info.provider)
+        } catch (e: Exception) {
+            false
+        }
+        if (bound) {
+            afterWidgetBound(id, info)
+            return
+        }
+        // Android asks the user for permission to show this widget.
+        val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND)
+            .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+            .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, info.provider)
+        try {
+            startActivityForResult(intent, REQ_WIDGET_BIND)
+        } catch (e: Exception) {
+            dropPendingWidget()
+            Toast.makeText(this, "Can't add this widget", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun afterWidgetBound(id: Int, info: AppWidgetProviderInfo) {
+        if (info.configure != null) {
+            try {
+                widgetHost.startAppWidgetConfigureActivityForResult(this, id, 0, REQ_WIDGET_CONFIGURE, null)
+            } catch (e: Exception) {
+                placeWidget(id, info) // its setup screen can't open: add it as it is
+            }
+        } else {
+            placeWidget(id, info)
+        }
+    }
+
+    private fun placeWidget(id: Int, info: AppWidgetProviderInfo) {
+        pendingWidgetId = -1
+        pendingProvider = null
+        val span = spanFor(info)
+        if (!homeGrid.addWidget(id, span.first, span.second)) {
+            try { widgetHost.deleteAppWidgetId(id) } catch (e: Exception) { /* ignore */ }
+            Toast.makeText(this, "No space on the home screen", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun dropPendingWidget() {
+        val id = pendingWidgetId
+        if (id >= 0) {
+            try { widgetHost.deleteAppWidgetId(id) } catch (e: Exception) { /* ignore */ }
+        }
+        pendingWidgetId = -1
+        pendingProvider = null
+    }
+
+    /** How many cells (columns, rows) a new widget should cover. */
+    private fun spanFor(info: AppWidgetProviderInfo): Pair<Int, Int> {
+        var sc = ceil(info.minWidth.toFloat() / max(1, homeGrid.cellWidthPx)).toInt()
+        var sr = ceil(info.minHeight.toFloat() / max(1, homeGrid.cellHeightPx)).toInt()
+        if (Build.VERSION.SDK_INT >= 31 && info.targetCellWidth > 0 && info.targetCellHeight > 0) {
+            sc = info.targetCellWidth
+            sr = info.targetCellHeight
+        }
+        return Pair(sc.coerceIn(1, prefs.homeCols), sr.coerceIn(1, prefs.homeRows))
+    }
+
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_WIDGET_BIND && requestCode != REQ_WIDGET_CONFIGURE) return
+        val id = pendingWidgetId
+        val info = pendingProvider
+        if (id < 0 || info == null) return
+        if (resultCode != RESULT_OK) {
+            dropPendingWidget()
+            return
+        }
+        if (requestCode == REQ_WIDGET_BIND) afterWidgetBound(id, info) else placeWidget(id, info)
+    }
+
+    private fun showWidgetMenu(item: HomeItem, anchor: View) {
+        val info = widgetManager.getAppWidgetInfo(item.widgetId)
+        val main = ArrayList<AppPopup.Item>()
+        if (info == null || info.resizeMode != AppWidgetProviderInfo.RESIZE_NONE) {
+            main.add(AppPopup.Item(R.drawable.ic_pop_edit, "Resize") { showResizeWidget(item) })
+        }
+        val danger = listOf(AppPopup.Item(R.drawable.ic_pop_remove, "Remove widget", true) { removeWidget(item) })
+        val name = if (info != null) info.loadLabel(packageManager) else "Widget"
+        AppPopup(this).show(root, anchor, name, listOf(main, danger), false) { }
+    }
+
+    private fun removeWidget(item: HomeItem) {
+        homeGrid.removeWidget(item)
+        try { widgetHost.deleteAppWidgetId(item.widgetId) } catch (e: Exception) { /* ignore */ }
+    }
+
+    private fun showResizeWidget(item: HomeItem) {
+        val builder = AlertDialog.Builder(this)
+        val ctx = builder.context
+        val d = resources.displayMetrics.density
+        var newW = item.spanC
+        var newH = item.spanR
+        val box = LinearLayout(ctx)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding((24 * d).toInt(), (12 * d).toInt(), (24 * d).toInt(), 0)
+
+        fun addRow(name: String, maxCells: Int, start: Int, onChange: (Int) -> Unit) {
+            val label = TextView(ctx)
+            label.text = "$name: $start"
+            label.textSize = 15f
+            val bar = SeekBar(ctx)
+            bar.max = max(0, maxCells - 1)
+            bar.progress = (start - 1).coerceIn(0, max(0, maxCells - 1))
+            bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    label.text = "$name: ${progress + 1}"
+                    onChange(progress + 1)
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            })
+            box.addView(label)
+            box.addView(bar)
+        }
+        addRow("Width (columns)", prefs.homeCols, newW) { newW = it }
+        addRow("Height (rows)", prefs.homeRows, newH) { newH = it }
+
+        builder.setTitle("Resize widget")
+            .setView(box)
+            .setPositiveButton("Apply") { _, _ ->
+                if (!homeGrid.resizeWidget(item, newW, newH)) {
+                    Toast.makeText(this, "Not enough space for that size", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private companion object {
+        const val WIDGET_HOST_ID = 4242
+        const val REQ_WIDGET_BIND = 9001
+        const val REQ_WIDGET_CONFIGURE = 9002
     }
 }

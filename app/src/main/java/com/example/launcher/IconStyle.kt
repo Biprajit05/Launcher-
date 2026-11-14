@@ -65,6 +65,9 @@ object IconStyle {
         label.textSize = 12f * labelScale
     }
 
+    /** The icon exactly as shown on the home screen (shape, icon pack, custom image). */
+    fun styledDrawable(ctx: Context, app: AppInfo, shape: Int): Drawable = drawableFor(ctx, app, shape)
+
     private fun drawableFor(ctx: Context, app: AppInfo, shape: Int): Drawable {
         // 1. Image picked from the gallery for this app: centre-cropped and cut to the chosen shape.
         val picked = IconManager.galleryIcon(ctx, app.component)

@@ -37,9 +37,10 @@ class AppPopup(private val ctx: Context) {
      * @param parent a view attached to the window (used as the popup's window token)
      * @param anchor the icon the menu belongs to
      * @param groups rows; a divider is drawn between groups
+     * @param showInfo false hides the (i) button (folders, widgets)
      * @param onInfo called when the (i) button is tapped
      */
-    fun show(parent: View, anchor: View, title: String, groups: List<List<Item>>, onInfo: () -> Unit) {
+    fun show(parent: View, anchor: View, title: String, groups: List<List<Item>>, showInfo: Boolean = true, onInfo: () -> Unit) {
         val dm = ctx.resources.displayMetrics
         val d = dm.density
         fun dp(v: Float): Int = (v * d).toInt()
@@ -82,6 +83,7 @@ class AppPopup(private val ctx: Context) {
             setColor(Color.argb(0x33, 0xFF, 0xFF, 0xFF))
         }
         info.contentDescription = "App info"
+        info.visibility = if (showInfo) View.VISIBLE else View.GONE
         info.setOnClickListener { window?.dismiss(); onInfo() }
         header.addView(info, LinearLayout.LayoutParams(dp(40f), dp(40f)))
         panel.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))

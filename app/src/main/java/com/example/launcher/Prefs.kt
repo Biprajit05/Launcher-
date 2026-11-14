@@ -94,7 +94,16 @@ class Prefs(context: Context) {
         e.apply()
     }
 
-    /** Saved home screen layout. null = never customised (use the default). */
+    /** Saved home screen (all pages, folders and widgets) as JSON. null = not saved yet. */
+    fun getHomePages(): String? = sp.getString("home_pages", null)
+
+    fun setHomePages(value: String?) {
+        val e = sp.edit()
+        if (value == null) e.remove("home_pages") else e.putString("home_pages", value)
+        e.apply()
+    }
+
+    /** Old single-page layout, only read once to migrate to [getHomePages]. */
     fun getHomeLayout(): String? = sp.getString("home_layout", null)
 
     fun setHomeLayout(value: String?) {
