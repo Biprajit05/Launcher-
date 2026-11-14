@@ -57,6 +57,7 @@ class HomeGridView @JvmOverloads constructor(
     var onFolderMenu: ((HomeItem, View) -> Unit)? = null
     var onWidgetMenu: ((HomeItem, View) -> Unit)? = null
     var onEmptyLongPress: (() -> Unit)? = null
+    var onEmptyTap: (() -> Unit)? = null
     var onChanged: ((List<HomeItem>, Int) -> Unit)? = null
 
     /** Finger moved while an app is being dragged (screen coordinates). */
@@ -892,6 +893,7 @@ class HomeGridView @JvmOverloads constructor(
                     val t = touched
                     releasePress()
                     if (t != null && !moved && !longFired) handleTap(t)
+                    else if (t == null && !moved && !longFired) onEmptyTap?.invoke()
                     settleIfNeeded()
                 }
                 endTouch()

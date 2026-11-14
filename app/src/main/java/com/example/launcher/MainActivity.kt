@@ -40,6 +40,7 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
@@ -219,7 +220,8 @@ class MainActivity : AppCompatActivity() {
 
         homeGrid.onAppClick = { app, v -> launch(app, v) }
         homeGrid.onAppMenu = { app, v -> showAppMenu(app, v, true) }
-        homeGrid.onEmptyLongPress = { if (!drawerOpen) showHomeMenu() }
+        homeGrid.onEmptyLongPress = { if (!drawerOpen) enterEditMode() }
+        homeGrid.onEmptyTap = { if (editPanel != null) exitEditMode() }
         homeGrid.onFolderClick = { item, v -> openFolder(item, v) }
         homeGrid.onFolderMenu = { item, v -> showFolderMenu(item, v) }
         homeGrid.onWidgetMenu = { item, v -> showWidgetMenu(item, v) }
@@ -351,7 +353,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
-        if (folderOv != null) closeFolder()
+        if (editPanel != null) exitEditMode()
+        else if (folderOv != null) closeFolder()
         else if (homeGrid.isSelecting) homeGrid.clearSelection()
         else if (drawerOpen) animateDrawer(false) // Home button closes the drawer
         else if (homeGrid.currentPage != 0 && !homeGrid.isDragging) homeGrid.goToPage(0)
@@ -360,7 +363,8 @@ class MainActivity : AppCompatActivity() {
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onBackPressed() {
         // Never leave the launcher; only close the folder / selection / drawer.
-        if (folderOv != null) closeFolder()
+        if (editPanel != null) exitEditMode()
+        else if (folderOv != null) closeFolder()
         else if (homeGrid.isSelecting) homeGrid.clearSelection()
         else if (drawerOpen) animateDrawer(false)
     }
@@ -1022,6 +1026,13 @@ class MainActivity : AppCompatActivity() {
             return super.dispatchTouchEvent(ev)
         }
 
+        // Two fingers moving together = edit mode.
+        if (a == MotionEvent.ACTION_DOWN) pinchFired = false
+        if (!drawerOpen && !dragging && folderOv == null && editPanel == null && !homeGrid.isDragging) {
+            pinch.onTouchEvent(ev)
+            if (pinchFired) tracking = false
+        }
+
         // While an icon is being moved on the home screen, never start the drawer swipe.
         if (homeGrid.isDragging) {
             if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
@@ -1051,7 +1062,7 @@ class MainActivity : AppCompatActivity() {
             val dy = ev.y - downY
             if (abs(dy) > slop && abs(dy) > abs(dx) && !homeGrid.isPaging) {
                 // A swipe that starts on a widget belongs to the widget (so lists inside it can scroll).
-                val canOpen = !drawerOpen && dy < 0 && !homeGrid.touchOnWidget
+                val canOpen = !drawerOpen && dy < 0 && !homeGrid.touchOnWidget && editPanel == null
                 val canClose = drawerOpen && dy > 0 && !drawerList.canScrollVertically(-1)
                 if (canOpen || canClose) {
                     startDrag(ev)
@@ -1220,6 +1231,264 @@ class MainActivity : AppCompatActivity() {
     private fun hideKeyboard() {
         search.clearFocus()
         getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(search.windowToken, 0)
+    }
+
+    // ---------- Edit mode (long-press empty space or pinch in) ----------
+
+    private var editPanel: LinearLayout? = null
+    private var pinchTotal = 1f
+    private var pinchFired = false
+    private val pinch: ScaleGestureDetector by lazy {
+        ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+                pinchTotal = 1f
+                pinchFired = false
+                return true
+            }
+
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                pinchTotal *= detector.scaleFactor
+                if (!pinchFired && pinchTotal < 0.85f) {
+                    pinchFired = true
+                    cancelChildTouch()
+                    enterEditMode()
+                }
+                return true
+            }
+        })
+    }
+
+    private fun cancelChildTouch() {
+        val t = SystemClock.uptimeMillis()
+        val c = MotionEvent.obtain(t, t, MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+        super.dispatchTouchEvent(c)
+        c.recycle()
+    }
+
+    private fun enterEditMode() {
+        if (editPanel != null || drawerOpen || folderOv != null || root.width <= 0) return
+        homeGrid.clearSelection()
+        val d = resources.displayMetrics.density
+        val rootGroup = root as ViewGroup
+        val nav = ViewCompat.getRootWindowInsets(root)?.getInsets(WindowInsetsCompat.Type.navigationBars())?.bottom ?: 0
+
+        val panel = LinearLayout(this)
+        panel.orientation = LinearLayout.HORIZONTAL
+        panel.setPadding((6 * d).toInt(), (14 * d).toInt(), (6 * d).toInt(), (12 * d).toInt())
+        panel.background = GradientDrawable().apply {
+            setColor(Color.argb(0xD8, 0x26, 0x28, 0x2C))
+            cornerRadius = 28 * d
+        }
+        panel.isClickable = true
+        panel.elevation = 10 * d
+
+        fun item(icon: Int, label: String, action: () -> Unit) {
+            val col = LinearLayout(this)
+            col.orientation = LinearLayout.VERTICAL
+            col.gravity = Gravity.CENTER_HORIZONTAL
+            col.setPadding(0, (2 * d).toInt(), 0, (2 * d).toInt())
+            val iv = ImageView(this)
+            iv.setImageResource(icon)
+            col.addView(iv, LinearLayout.LayoutParams((28 * d).toInt(), (28 * d).toInt()))
+            val tv = TextView(this)
+            tv.text = label
+            tv.setTextColor(Color.WHITE)
+            tv.textSize = 12f
+            tv.maxLines = 1
+            tv.gravity = Gravity.CENTER
+            tv.setPadding(0, (6 * d).toInt(), 0, 0)
+            col.addView(tv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            col.setOnClickListener { action() }
+            panel.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        item(R.drawable.ic_edit_style, "Icon style") { showIconStyleDialog() }
+        item(R.drawable.ic_edit_widgets, "Widgets") { exitEditMode(); showWidgetPicker() }
+        item(R.drawable.ic_edit_grid, "App grid") { showGridDialog() }
+        item(R.drawable.ic_edit_settings, "Settings") {
+            exitEditMode(false)
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
+        val lp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM)
+        lp.marginStart = (14 * d).toInt()
+        lp.marginEnd = (14 * d).toInt()
+        lp.bottomMargin = nav + (12 * d).toInt()
+        panel.alpha = 0f
+        rootGroup.addView(panel, lp)
+        editPanel = panel
+        homeGrid.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+
+        // Home shrinks to the top, leaving room for the menu.
+        val h = root.height.toFloat()
+        val target = ((h - (96 * d) - nav - (24 * d)) / h).coerceIn(0.7f, 0.92f)
+        home.animate().cancel()
+        home.pivotX = home.width / 2f
+        home.pivotY = 0f
+        val dur = (260 * prefs.factor).toLong()
+        home.animate().scaleX(target).scaleY(target).setDuration(dur).setInterpolator(openInterp).start()
+        panel.post {
+            panel.translationY = panel.height + 40 * d
+            panel.animate().alpha(1f).translationY(0f).setDuration(dur).setInterpolator(openInterp).start()
+        }
+    }
+
+    /** animateHome = false when another screen is about to open (Settings). */
+    private fun exitEditMode(animateHome: Boolean = true) {
+        val panel = editPanel ?: return
+        editPanel = null
+        val d = resources.displayMetrics.density
+        val dur = (220 * prefs.factor).toLong()
+        panel.animate().cancel()
+        panel.animate().alpha(0f).translationY(panel.height + 40 * d).setDuration(dur)
+            .withEndAction { (root as ViewGroup).removeView(panel) }.start()
+        home.animate().cancel()
+        val resetPivot = Runnable {
+            home.pivotX = home.width / 2f
+            home.pivotY = home.height / 2f
+        }
+        if (animateHome) {
+            home.animate().scaleX(1f).scaleY(1f).setDuration(dur).setInterpolator(closeInterp)
+                .withEndAction(resetPivot).start()
+        } else {
+            home.scaleX = 1f
+            home.scaleY = 1f
+            resetPivot.run()
+        }
+    }
+
+    private fun chip(text: String, selected: Boolean, onClick: () -> Unit): TextView {
+        val d = resources.displayMetrics.density
+        val tv = TextView(this)
+        tv.text = text
+        tv.textSize = 14f
+        tv.gravity = Gravity.CENTER
+        tv.setPadding((8 * d).toInt(), (10 * d).toInt(), (8 * d).toInt(), (10 * d).toInt())
+        val ta = obtainStyledAttributes(intArrayOf(android.R.attr.textColorPrimary))
+        val normalText = ta.getColor(0, Color.GRAY)
+        ta.recycle()
+        tv.setTextColor(if (selected) Color.WHITE else normalText)
+        tv.background = GradientDrawable().apply {
+            cornerRadius = 20 * d
+            setColor(if (selected) Color.rgb(0x2D, 0x7F, 0xF9) else Color.argb(36, 128, 128, 128))
+        }
+        tv.setOnClickListener { onClick() }
+        return tv
+    }
+
+    /** A row of equal-width chips; picking one re-colours the row and calls [onPick]. */
+    private fun chipRow(labels: List<String>, startIndex: Int, current: () -> Int, onPick: (Int) -> Unit, rowsView: LinearLayout, refresh: MutableList<() -> Unit>): View {
+        val d = resources.displayMetrics.density
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        fun build() {
+            row.removeAllViews()
+            labels.forEachIndexed { i, l ->
+                val idx = startIndex + i
+                val c = chip(l, current() == idx) { onPick(idx); refresh.forEach { it() } }
+                val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                lp.marginStart = (3 * d).toInt()
+                lp.marginEnd = (3 * d).toInt()
+                row.addView(c, lp)
+            }
+        }
+        build()
+        refresh.add { build() }
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = (6 * d).toInt()
+        rowsView.addView(row, lp)
+        return row
+    }
+
+    private fun sectionTitle(box: LinearLayout, text: String) {
+        val d = resources.displayMetrics.density
+        val tv = TextView(this)
+        tv.text = text
+        tv.textSize = 15f
+        tv.setTypeface(tv.typeface, android.graphics.Typeface.BOLD)
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = (16 * d).toInt()
+        box.addView(tv, lp)
+    }
+
+    private fun applyLookNow() {
+        IconStyle.clear()
+        if (allApps.isNotEmpty()) bind(false)
+    }
+
+    private fun showIconStyleDialog() {
+        val d = resources.displayMetrics.density
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding((20 * d).toInt(), (4 * d).toInt(), (20 * d).toInt(), (8 * d).toInt())
+        val refresh = ArrayList<() -> Unit>()
+
+        sectionTitle(box, "Icon shape")
+        chipRow(listOf("Original", "Circle", "Squircle"), 0, { prefs.shape }, { prefs.shape = it; applyLookNow() }, box, refresh)
+        chipRow(listOf("Rounded", "Square", "Teardrop"), 3, { prefs.shape }, { prefs.shape = it; applyLookNow() }, box, refresh)
+
+        val sizeLabel = TextView(this)
+        sizeLabel.textSize = 15f
+        sizeLabel.setTypeface(sizeLabel.typeface, android.graphics.Typeface.BOLD)
+        sizeLabel.text = "Icon size: ${prefs.iconPercent}%"
+        val slp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        slp.topMargin = (18 * d).toInt()
+        box.addView(sizeLabel, slp)
+        val bar = SeekBar(this)
+        bar.max = 80
+        bar.progress = (prefs.iconPercent - 60).coerceIn(0, 80)
+        bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                sizeLabel.text = "Icon size: ${60 + progress}%"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                prefs.iconPercent = 60 + (seekBar?.progress ?: 40)
+                applyLookNow()
+            }
+        })
+        box.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        val pack = android.widget.Button(this)
+        pack.isAllCaps = false
+        pack.text = "Icon pack: " + IconManager.selectedPackLabel(this)
+        pack.setOnClickListener {
+            IconDialogs.choosePack(this, true) { pkg ->
+                IconManager.setSelectedPack(this, pkg)
+                pack.text = "Icon pack: " + IconManager.selectedPackLabel(this)
+                refreshIcons()
+            }
+        }
+        val plp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        plp.topMargin = (12 * d).toInt()
+        box.addView(pack, plp)
+
+        val sv = android.widget.ScrollView(this)
+        sv.addView(box)
+        AlertDialog.Builder(this)
+            .setTitle("Icon style")
+            .setView(sv)
+            .setPositiveButton("Done", null)
+            .show()
+    }
+
+    private fun showGridDialog() {
+        val d = resources.displayMetrics.density
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding((20 * d).toInt(), (4 * d).toInt(), (20 * d).toInt(), (8 * d).toInt())
+        val refresh = ArrayList<() -> Unit>()
+
+        sectionTitle(box, "Home screen grid")
+        chipRow(listOf("4 × 6", "4 × 7", "5 × 6"), 0, { prefs.homeGrid }, { prefs.homeGrid = it; applyLookNow() }, box, refresh)
+
+        sectionTitle(box, "App drawer columns")
+        chipRow(listOf("4", "5"), 4, { prefs.columns }, { prefs.columns = it; applyLookNow() }, box, refresh)
+
+        AlertDialog.Builder(this)
+            .setTitle("App grid")
+            .setView(box)
+            .setPositiveButton("Done", null)
+            .show()
     }
 
     // ---------- Multi-select pill ----------
