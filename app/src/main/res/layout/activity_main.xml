@@ -45,7 +45,7 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="12dp"
             android:layout_marginEnd="12dp"
-            android:layout_marginBottom="12dp"
+            android:layout_marginBottom="0dp"
             android:background="@drawable/dock_bg"
             android:padding="6dp" />
     </LinearLayout>
@@ -73,19 +73,17 @@
 
             <com.example.launcher.AlphabetRail
                 android:id="@+id/rail"
-                android:layout_width="22dp"
-                android:layout_height="match_parent"
-                android:layout_gravity="end"
-                android:layout_marginTop="8dp"
-                android:layout_marginBottom="8dp"
-                android:layout_marginEnd="2dp" />
+                android:layout_width="16dp"
+                android:layout_height="300dp"
+                android:layout_gravity="end|center_vertical"
+                android:layout_marginEnd="3dp" />
 
             <TextView
                 android:id="@+id/railBubble"
                 android:layout_width="56dp"
                 android:layout_height="56dp"
                 android:layout_gravity="end"
-                android:layout_marginEnd="40dp"
+                android:layout_marginEnd="30dp"
                 android:background="@drawable/rail_bubble_bg"
                 android:gravity="center"
                 android:textColor="@color/label"
