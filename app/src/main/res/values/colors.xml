@@ -8,4 +8,5 @@
     <color name="home_search_text">#FF3A3A3C</color>
     <color name="dock_highlight">#66FFFFFF</color>
     <color name="ic_bg">#FF3B6FE0</color>
+    <color name="splash_bg">#FFFFFFFF</color>
 </resources>
