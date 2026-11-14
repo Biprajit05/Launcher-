@@ -2,6 +2,7 @@
     <color name="label">#FFF2F2F7</color>
     <color name="hint">#FF8E8E93</color>
     <color name="drawer_bg">#FF1C1C1E</color>
+    <color name="drawer_bg_blur">#A61C1C1E</color>
     <color name="search_bg">#FF2C2C2E</color>
     <color name="dock_bg">#66000000</color>
     <color name="splash_bg">#FF121316</color>
