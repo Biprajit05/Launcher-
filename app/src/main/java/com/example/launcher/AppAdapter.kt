@@ -20,6 +20,29 @@ class AppAdapter(
 ) : RecyclerView.Adapter<AppAdapter.VH>() {
 
     private var items: List<AppInfo> = emptyList()
+    private var recycler: RecyclerView? = null
+    private var lastWidth = -1
+
+    override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
+        recycler = recyclerView
+        // Re-size the icons once the list knows its real width, so big icons never get cut off.
+        recyclerView.addOnLayoutChangeListener { _, l, _, r, _, _, _, _, _ ->
+            val w = r - l
+            if (w != lastWidth) {
+                lastWidth = w
+                if (items.isNotEmpty()) recyclerView.post { notifyDataSetChanged() }
+            }
+        }
+    }
+
+    /** Widest icon that fits one column of this list (0 padding is already excluded). */
+    private fun maxIconPx(): Int {
+        val rv = recycler ?: return Int.MAX_VALUE
+        val w = rv.width - rv.paddingLeft - rv.paddingRight
+        if (w <= 0) return Int.MAX_VALUE
+        val colW = w / columns().coerceAtLeast(1)
+        return (colW - 6 * rv.resources.displayMetrics.density).toInt()
+    }
     private var textColor: Int? = null
 
     /** Label colour for the app drawer (light/dark drawer background). */
@@ -71,7 +94,7 @@ class AppAdapter(
         holder.itemView.animate().cancel()
         holder.itemView.scaleX = 1f
         holder.itemView.scaleY = 1f
-        IconStyle.bindIcon(holder.icon, holder.label, app, prefs.shape, prefs.scale, columns(), prefs.labelScale)
+        IconStyle.bindIcon(holder.icon, holder.label, app, prefs.shape, prefs.scale, columns(), prefs.labelScale, maxIconPx())
         if (!onWallpaper) textColor?.let { holder.label.setTextColor(it) }
     }
 

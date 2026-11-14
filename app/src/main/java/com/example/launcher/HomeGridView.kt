@@ -14,6 +14,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 
 /** One app on the home screen, with its cell. */
 class HomeItem(val app: AppInfo, var col: Int, var row: Int)
@@ -130,6 +131,11 @@ class HomeGridView @JvmOverloads constructor(
         val label = v.findViewById<TextView>(R.id.label)
         label.setTextColor(Color.WHITE)
         label.setShadowLayer(4f, 0f, 1f, Color.BLACK)
+        // Tight cell: icon + label centred, so big icons use the whole cell instead of being capped.
+        val vp = (2 * resources.displayMetrics.density).toInt()
+        v.setPadding(v.paddingLeft, vp, v.paddingRight, vp)
+        (v as? android.widget.LinearLayout)?.gravity =
+            android.view.Gravity.CENTER_HORIZONTAL or android.view.Gravity.CENTER_VERTICAL
         val e = Entry(m, v)
         bindEntry(e)
         addView(v)
@@ -154,7 +160,9 @@ class HomeGridView @JvmOverloads constructor(
         cellH = max(1, (h - paddingTop - paddingBottom) / rows)
         // Icon must fit the cell: cell padding (16dp) + gap (4dp) + one label line.
         val labelPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 12f * labelScale, resources.displayMetrics)
-        val cap = (cellH - 20f * d - labelPx * 1.3f).toInt().coerceAtLeast((24f * d).toInt())
+        val capH = cellH - 8f * d - labelPx * 1.3f   // 2+2dp padding, 4dp gap, one label line
+        val capW = cellW - 6f * d
+        val cap = min(capH, capW).toInt().coerceAtLeast((24f * d).toInt())
         if (cap != iconCap) {
             iconCap = cap
             for (e in entries) bindEntry(e)

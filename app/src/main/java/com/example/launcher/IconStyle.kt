@@ -50,7 +50,8 @@ object IconStyle {
     ) {
         val dm = icon.resources.displayMetrics
         val d = dm.density
-        val cap = min(dm.widthPixels / columns - (16f * d).toInt(), maxIconPx)
+        // maxIconPx is the real room measured by the container; without it, estimate from the screen.
+        val cap = if (maxIconPx != Int.MAX_VALUE) maxIconPx else dm.widthPixels / columns - (16f * d).toInt()
         val want = (52f * d * scale).toInt()
         val px = min(want, cap).coerceAtLeast((24f * d).toInt())
         val lp = icon.layoutParams
