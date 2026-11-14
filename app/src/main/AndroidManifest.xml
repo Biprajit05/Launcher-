@@ -18,6 +18,13 @@
             <data android:scheme="https" />
         </intent>
         <intent><action android:name="android.media.action.IMAGE_CAPTURE" /></intent>
+        <!-- Icon packs (so they are visible to the launcher on Android 11+) -->
+        <intent><action android:name="org.adw.launcher.THEMES" /></intent>
+        <intent><action android:name="com.novalauncher.THEME" /></intent>
+        <intent><action android:name="com.anddoes.launcher.THEME" /></intent>
+        <intent><action android:name="org.adw.launcher.icons.ACTION_PICK_ICON" /></intent>
+        <intent><action android:name="com.gau.go.launcherex.theme" /></intent>
+        <intent><action android:name="ch.deletescape.lawnchair.ICONPACK" /></intent>
     </queries>
 
     <application
