@@ -61,7 +61,7 @@ class HomeGridView @JvmOverloads constructor(
     var onChanged: ((List<HomeItem>, Int) -> Unit)? = null
 
     /** Finger moved while an app is being dragged (screen coordinates). */
-    var onDragMove: ((Float, Float) -> Unit)? = null
+    var onDragMove: ((AppInfo, Float, Float) -> Unit)? = null
 
     /** App dropped. Return true if something outside the grid (the dock) took it. */
     var onDropOutside: ((AppInfo, Float, Float) -> Boolean)? = null
@@ -286,6 +286,92 @@ class HomeGridView @JvmOverloads constructor(
         }
         pageAnim = anim
         anim.start()
+    }
+
+    // ---------- Drop from outside (app drawer / dock) ----------
+
+    /** Next / previous page while an icon from outside is dragged to the edge. */
+    fun flipPage(dir: Int): Boolean {
+        val n = currentPage + dir
+        if (n in 0 until pageCount) { goToPage(n); return true }
+        if (dir > 0 && n >= pageCount && pageCount < MAX_PAGES) {
+            pageCount++
+            notifyPageScroll()
+            goToPage(pageCount - 1)
+            return true
+        }
+        return false
+    }
+
+    /** Remove an empty page that was opened while dragging. */
+    fun tidyPages() = pruneEmptyPages()
+
+    /** Puts an app that was dragged in from outside at the screen position. Returns DROP_*. */
+    fun dropExternalApp(app: AppInfo, rawX: Float, rawY: Float): Int {
+        if (contains(app)) return DROP_DUP
+        val loc = IntArray(2)
+        getLocationOnScreen(loc)
+        val sc = (parent as? View)?.scaleX ?: 1f
+        val cx = (rawX - loc[0]) / sc + scrollX
+        val cy = (rawY - loc[1]) / sc
+        val page = floor(cx / max(1, width)).toInt().coerceIn(0, max(0, pageCount - 1))
+        val col = floor((cx - page * width - paddingLeft) / max(1, cellW)).toInt().coerceIn(0, max(0, cols - 1))
+        val row = floor((cy - paddingTop) / max(1, cellH)).toInt().coerceIn(0, max(0, rows - 1))
+        val other = entryCovering(page, col, row, null)
+
+        fun put(p: Int, c: Int, r: Int): Int {
+            val m = HomeItem(HomeItem.APP, p, c, r, app = app)
+            val e = makeEntry(m) ?: return DROP_FULL
+            entries.add(e)
+            e.view.alpha = 0f
+            e.view.scaleX = 0.6f
+            e.view.scaleY = 0.6f
+            requestLayout()
+            notifyChanged()
+            e.view.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180L).start()
+            return DROP_PLACED
+        }
+
+        if (other == null) return put(page, col, row)
+
+        val oi = other.item
+        val ox = page * width + paddingLeft + oi.col * cellW + cellW / 2f
+        val oy = paddingTop + oi.row * cellH + cellH / 2f
+        val near = hypot(ox - cx, oy - cy) < min(cellW, cellH) * 0.32f
+        val oa = oi.app
+        val of = oi.folder
+        if (near && oi.kind == HomeItem.APP && oa != null) {
+            val fm = HomeItem(HomeItem.FOLDER, oi.page, oi.col, oi.row, folder = FolderData("Folder", arrayListOf(oa, app)))
+            entries.remove(other)
+            removeView(other.view)
+            val fe = makeEntry(fm)
+            if (fe != null) {
+                entries.add(fe)
+                fe.view.alpha = 0f
+                fe.view.animate().alpha(1f).setDuration(180L).start()
+            }
+            afterStructureChange()
+            return DROP_PLACED
+        }
+        if (near && oi.kind == HomeItem.FOLDER && of != null) {
+            if (of.apps.none { it.component == app.component }) of.apps.add(app)
+            bindEntry(other)
+            afterStructureChange()
+            return DROP_PLACED
+        }
+
+        // Cell is taken: use the closest free cell on this page, else any free spot.
+        val g = occupancy(page, null)
+        var best = -1
+        var bestD = Float.MAX_VALUE
+        for (i in 0 until cols * rows) {
+            if (g[i]) continue
+            val d = hypot((i % cols - col).toFloat(), (i / cols - row).toFloat())
+            if (d < bestD) { bestD = d; best = i }
+        }
+        if (best >= 0) return put(page, best % cols, best / cols)
+        val m = HomeItem(HomeItem.APP, 0, 0, 0, app = app)
+        return if (placeNew(m, true)) DROP_PLACED else DROP_FULL
     }
 
     // ---------- Multi-select ----------
@@ -1036,7 +1122,7 @@ class HomeGridView @JvmOverloads constructor(
             }
         }
         val app = e.item.app
-        if (!groupDrag && e.item.kind == HomeItem.APP && app != null) onDragMove?.invoke(rawX, rawY)
+        if (!groupDrag && e.item.kind == HomeItem.APP && app != null) onDragMove?.invoke(app, rawX, rawY)
         updateHover(e)
         updateEdge(x)
     }
@@ -1169,7 +1255,10 @@ class HomeGridView @JvmOverloads constructor(
         // Dropped on the dock? Then the dock took it: the app just glides back home.
         val dropApp = m.app
         if (m.kind == HomeItem.APP && dropApp != null && onDropOutside?.invoke(dropApp, rawX, rawY) == true) {
-            snapBack(e)
+            // The dock took it: the icon moves there (it leaves the home screen).
+            entries.remove(e)
+            removeView(view)
+            afterStructureChange()
             return
         }
 
@@ -1256,5 +1345,8 @@ class HomeGridView @JvmOverloads constructor(
 
     companion object {
         const val MAX_PAGES = 9
+        const val DROP_PLACED = 0
+        const val DROP_DUP = 1
+        const val DROP_FULL = 2
     }
 }

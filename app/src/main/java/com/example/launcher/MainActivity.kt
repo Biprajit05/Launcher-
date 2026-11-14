@@ -67,6 +67,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.updatePadding
 import androidx.core.widget.doAfterTextChanged
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.util.Collections
 import java.util.concurrent.Executors
@@ -112,7 +113,12 @@ class MainActivity : AppCompatActivity() {
     private var lastRawY = 0f
     private var extDragging = false
     private var overlay: ImageView? = null
+    private var overlayApp: AppInfo? = null
     private var hoverSlot = -1
+    private val MAX_DOCK = 6
+    private var pendingFromDock = false
+    private var extEdgeDir = 0
+    private val extEdgeRun = Runnable { onExtEdgeDwell() }
     private var focusSearchOnOpen = false
 
     // Custom icons: gallery picker + change tracking
@@ -204,15 +210,17 @@ class MainActivity : AppCompatActivity() {
 
         val menuFromList: (AppInfo, View) -> Unit = { a, v -> showAppMenu(a, v, false) }
         // Drawer: long-press then drag = put on the dock; long-press and release = menu.
-        val drawerLongPress: (AppInfo, View) -> Unit = { a, v ->
-            if (prefs.dockEnabled) beginDrawerPress(a, v) else showAppMenu(a, v, false)
-        }
-        dockAdapter = AppAdapter(prefs, { 4 }, true, false, ::launch, menuFromList)
+        val drawerLongPress: (AppInfo, View) -> Unit = { a, v -> beginDrawerPress(a, v, false) }
+        // Dock: long-press then drag = reorder / move out; long-press and release = menu.
+        val dockLongPress: (AppInfo, View) -> Unit = { a, v -> beginDrawerPress(a, v, true) }
+        dockAdapter = AppAdapter(prefs, { 4 }, true, false, ::launch, dockLongPress, { dockCellW() })
         drawerAdapter = AppAdapter(prefs, { prefs.columns }, false, true, ::launch, drawerLongPress)
 
-        dock.layoutManager = object : GridLayoutManager(this, 4) {
+        dock.layoutManager = object : LinearLayoutManager(this, HORIZONTAL, false) {
+            override fun canScrollHorizontally() = false
             override fun canScrollVertically() = false
         }
+        dock.minimumHeight = (84 * resources.displayMetrics.density).toInt()
         drawerList.layoutManager = GridLayoutManager(this, prefs.columns)
         dock.adapter = dockAdapter
         drawerList.adapter = drawerAdapter
@@ -232,11 +240,10 @@ class MainActivity : AppCompatActivity() {
         homeGrid.onWidgetGone = { id ->
             try { widgetHost.deleteAppWidgetId(id) } catch (e: Exception) { /* already gone */ }
         }
-        homeGrid.onDragMove = { x, y -> setHover(dockSlotAt(x, y)) }
-        homeGrid.onDragEnd = { setHover(-1) }
+        homeGrid.onDragMove = { app, x, y -> updateDockPreview(app, x, y, false) }
+        homeGrid.onDragEnd = { setHover(-1); showDockList(dockApps) }
         homeGrid.onDropOutside = { app, x, y ->
-            val slot = dockSlotAt(x, y)
-            if (slot >= 0) { assignToDock(app, slot); true } else false
+            if (inDockZone(x, y)) { insertIntoDock(app, x); true } else false
         }
 
         // Full screen: draw behind the status + navigation bars and pad content instead.
@@ -387,7 +394,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Saved dock (if any), padded with the default apps so it always has 4. */
+    /** Saved dock (if any); a fresh install starts with 4 default apps. */
     private fun resolveDock(ctx: Context, apps: List<AppInfo>): List<AppInfo> {
         val defaults = AppRepository.pickDock(ctx, apps)
         val saved = prefs.getDock() ?: return defaults
@@ -397,12 +404,9 @@ class MainActivity : AppCompatActivity() {
             val app = apps.firstOrNull { it.component == comp } ?: continue
             if (out.none { it.component == comp }) out.add(app)
         }
+        if (saved.isEmpty()) return emptyList() // the user emptied the dock on purpose
         if (out.isEmpty()) return defaults
-        for (a in defaults) {
-            if (out.size >= 4) break
-            if (out.none { it.component == a.component }) out.add(a)
-        }
-        return out.take(4)
+        return out.take(MAX_DOCK)
     }
 
     private fun bind(resetHome: Boolean = true) {
@@ -411,6 +415,8 @@ class MainActivity : AppCompatActivity() {
         if (prefs.dockBackground) dock.setBackgroundResource(R.drawable.dock_bg) else dock.background = null
         (drawerList.layoutManager as GridLayoutManager).spanCount = cols
         dockAdapter.submit(dockApps)
+        shownDock = null
+        dock.alpha = if (dockApps.isEmpty()) 0f else 1f
         homeGrid.configure(prefs.homeCols, prefs.homeRows, prefs.scale, prefs.shape, prefs.labelScale)
         if (resetHome) {
             val h = loadHome()
@@ -699,13 +705,14 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Menus ----------
 
-    private fun showAppMenu(app: AppInfo, anchor: View, onHome: Boolean) {
+    private fun showAppMenu(app: AppInfo, anchor: View, onHome: Boolean, fromDock: Boolean = false) {
         val target = anchor.findViewById<View>(R.id.icon) ?: anchor
         val main = ArrayList<AppPopup.Item>()
         main.add(AppPopup.Item(R.drawable.ic_pop_image, "Edit icon") { showEditIcon(app) })
         main.add(AppPopup.Item(R.drawable.ic_pop_edit, "Rename") { showRenameDialog(app) })
         if (!onHome) main.add(AppPopup.Item(R.drawable.ic_pop_add, "Add to home") { addToHome(app) })
         val danger = ArrayList<AppPopup.Item>()
+        if (fromDock) danger.add(AppPopup.Item(R.drawable.ic_pop_remove, "Remove from dock", true) { removeFromDock(app) })
         if (onHome) {
             main.add(AppPopup.Item(R.drawable.ic_pop_add, "Select multiple") { homeGrid.startSelection(app) })
             danger.add(AppPopup.Item(R.drawable.ic_pop_remove, "Remove from home", true) { homeGrid.removeApp(app) })
@@ -864,7 +871,8 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Dock: drag & drop ----------
 
-    private fun beginDrawerPress(app: AppInfo, anchor: View) {
+    private fun beginDrawerPress(app: AppInfo, anchor: View, fromDock: Boolean) {
+        pendingFromDock = fromDock
         pendingApp = app
         pendingAnchor = anchor
         pressX = lastRawX
@@ -889,6 +897,7 @@ class MainActivity : AppCompatActivity() {
         img.scaleY = 1.15f
         (root as FrameLayout).addView(img)
         overlay = img
+        overlayApp = app
         moveExtDrag(lastRawX, lastRawY)
         if (drawerOpen) animateDrawer(false) // reveal the home screen + dock
         hideKeyboard()
@@ -900,27 +909,54 @@ class MainActivity : AppCompatActivity() {
         root.getLocationOnScreen(loc)
         img.translationX = rawX - loc[0] - img.layoutParams.width / 2f
         img.translationY = rawY - loc[1] - img.layoutParams.height / 2f
-        setHover(dockSlotAt(rawX, rawY))
+        updateDockPreview(overlayApp ?: return, rawX, rawY, pendingFromDock)
+        updateExtEdge(rawX)
     }
 
     private fun endExtDrag() {
         overlay?.let { (root as FrameLayout).removeView(it) }
         overlay = null
+        overlayApp = null
         extDragging = false
+        ui.removeCallbacks(extEdgeRun)
+        extEdgeDir = 0
         setHover(-1)
     }
 
-    /** Which dock slot (0..3) is under this screen point, or -1. */
-    private fun dockSlotAt(x: Float, y: Float): Int {
-        if (!prefs.dockEnabled || dock.visibility != View.VISIBLE || dock.width == 0) return -1
+    // ---------- Dock (1..6 apps, always centred) ----------
+
+    private val gapApp: AppInfo by lazy {
+        AppInfo("", AppInfo.GAP_PKG, ComponentName(AppInfo.GAP_PKG, "gap"), ColorDrawable(Color.TRANSPARENT))
+    }
+
+    /** Width of one dock cell (px): the dock is MAX_DOCK cells wide when full. */
+    private fun dockCellW(): Int {
+        val d = resources.displayMetrics.density
+        val avail = resources.displayMetrics.widthPixels - 36 * d // margins + padding
+        return min(72f * d, avail / MAX_DOCK).toInt()
+    }
+
+    private fun homeCenterX(): Float {
+        val loc = IntArray(2)
+        home.getLocationOnScreen(loc)
+        return loc[0] + home.width * home.scaleX / 2f
+    }
+
+    /** Position (0 until slots) the finger is over, for a centred row of [slots] cells. */
+    private fun dockIndexAt(x: Float, slots: Int): Int {
+        val cell = dockCellW() * home.scaleX
+        val rel = (x - homeCenterX()) / cell + (slots - 1) / 2f
+        return Math.round(rel).coerceIn(0, max(0, slots - 1))
+    }
+
+    /** True if the finger is on (or just around) the dock strip. */
+    private fun inDockZone(x: Float, y: Float): Boolean {
+        if (!prefs.dockEnabled || dock.visibility != View.VISIBLE) return false
         val loc = IntArray(2)
         dock.getLocationOnScreen(loc)
         val sc = home.scaleX
-        val w = dock.width * sc
-        val h = dock.height * sc
         val pad = 24 * resources.displayMetrics.density
-        if (x < loc[0] || x > loc[0] + w || y < loc[1] - pad || y > loc[1] + h + pad) return -1
-        return ((x - loc[0]) / w * 4).toInt().coerceIn(0, 3)
+        return y >= loc[1] - pad && y <= loc[1] + dock.height * sc + pad
     }
 
     private fun setHover(slot: Int) {
@@ -932,20 +968,95 @@ class MainActivity : AppCompatActivity() {
             ?.scaleX(1.25f)?.scaleY(1.25f)?.setDuration(120)?.start()
     }
 
-    private fun assignToDock(app: AppInfo, slot: Int) {
-        val list = dockApps.toMutableList()
-        val existing = list.indexOfFirst { it.component == app.component }
-        if (slot >= list.size) {
-            if (existing >= 0) list.removeAt(existing)
-            list.add(app)
-        } else if (existing >= 0) {
-            Collections.swap(list, existing, slot)
-        } else {
-            list[slot] = app
+    private var shownDock: List<AppInfo>? = null
+
+    /** Show a list in the dock; items slide to their new places. */
+    private fun showDockList(list: List<AppInfo>) {
+        if (shownDock == list) return
+        shownDock = list
+        dock.alpha = if (list.isEmpty()) 0f else 1f
+        dockAdapter.submitAnimated(list)
+    }
+
+    /** While an icon is dragged: open a gap in the dock where it would land. */
+    private fun updateDockPreview(app: AppInfo, x: Float, y: Float, fromDock: Boolean) {
+        val without = dockApps.filter { it.component != app.component }
+        if (!inDockZone(x, y)) {
+            setHover(-1)
+            showDockList(if (fromDock) without else dockApps)
+            return
         }
-        dockApps = list.take(4)
-        prefs.setDock(dockApps.joinToString("|") { it.component.flattenToString() })
-        dockAdapter.submit(dockApps)
+        if (without.size >= MAX_DOCK) {
+            // Dock is full: the app under the finger would be replaced.
+            showDockList(without)
+            setHover(dockIndexAt(x, without.size))
+            return
+        }
+        setHover(-1)
+        val idx = dockIndexAt(x, without.size + 1)
+        val list = ArrayList<AppInfo>(without)
+        list.add(idx, gapApp)
+        showDockList(list)
+    }
+
+    private fun saveDock(list: List<AppInfo>) {
+        dockApps = list.take(MAX_DOCK)
+        prefs.setDock(if (dockApps.isEmpty()) "" else dockApps.joinToString("|") { it.component.flattenToString() })
+        shownDock = null
+        showDockList(dockApps)
+    }
+
+    /** Put [app] into the dock at the place under [x] (moves it if it is already there). */
+    private fun insertIntoDock(app: AppInfo, x: Float) {
+        val base = dockApps.filter { it.component != app.component }.toMutableList()
+        if (base.size >= MAX_DOCK) {
+            base[dockIndexAt(x, base.size)] = app
+        } else {
+            base.add(dockIndexAt(x, base.size + 1), app)
+        }
+        saveDock(base)
+    }
+
+    private fun removeFromDock(app: AppInfo) {
+        saveDock(dockApps.filter { it.component != app.component })
+    }
+
+    /** Finger lifted after dragging an icon from the drawer or the dock. */
+    private fun finishExtDrop(app: AppInfo, x: Float, y: Float, fromDock: Boolean) {
+        setHover(-1)
+        if (inDockZone(x, y)) {
+            insertIntoDock(app, x)
+            return
+        }
+        when (homeGrid.dropExternalApp(app, x, y)) {
+            HomeGridView.DROP_PLACED -> if (fromDock) removeFromDock(app)
+            HomeGridView.DROP_DUP -> {
+                if (fromDock) removeFromDock(app)
+                else Toast.makeText(this, "Already on the home screen", Toast.LENGTH_SHORT).show()
+            }
+            else -> Toast.makeText(this, "Home screen is full", Toast.LENGTH_SHORT).show()
+        }
+        homeGrid.tidyPages()
+        showDockList(dockApps)
+    }
+
+    /** Hold an icon at the left / right edge of the screen to flip home pages. */
+    private fun updateExtEdge(rawX: Float) {
+        val edge = 32 * resources.displayMetrics.density
+        val dir = when {
+            rawX < edge -> -1
+            rawX > resources.displayMetrics.widthPixels - edge -> 1
+            else -> 0
+        }
+        if (dir == extEdgeDir) return
+        extEdgeDir = dir
+        ui.removeCallbacks(extEdgeRun)
+        if (dir != 0) ui.postDelayed(extEdgeRun, 550L)
+    }
+
+    private fun onExtEdgeDwell() {
+        if (!extDragging || extEdgeDir == 0) return
+        if (homeGrid.flipPage(extEdgeDir)) ui.postDelayed(extEdgeRun, 800L)
     }
 
     private fun firstLetter(label: String): String {
@@ -1006,11 +1117,12 @@ class MainActivity : AppCompatActivity() {
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     val anchor = pendingAnchor
                     if (extDragging) {
-                        val slot = if (a == MotionEvent.ACTION_UP) dockSlotAt(ev.rawX, ev.rawY) else -1
-                        if (slot >= 0) assignToDock(pa, slot)
+                        val fromDock = pendingFromDock
                         endExtDrag()
+                        if (a == MotionEvent.ACTION_UP) finishExtDrop(pa, ev.rawX, ev.rawY, fromDock)
+                        else showDockList(dockApps)
                     } else if (a == MotionEvent.ACTION_UP && anchor != null) {
-                        showAppMenu(pa, anchor, false)
+                        showAppMenu(pa, anchor, false, pendingFromDock)
                     }
                     pendingApp = null; pendingAnchor = null
                     tracking = false; vt?.recycle(); vt = null

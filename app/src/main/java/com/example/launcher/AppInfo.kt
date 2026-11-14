@@ -11,4 +11,9 @@ data class AppInfo(
     val icon: Drawable,
     /** The app's real name, without any rename. */
     val systemLabel: String = label
-)
+) {
+    companion object {
+        /** Invisible stand-in that opens a gap in the dock while an icon is dragged over it. */
+        const val GAP_PKG = "__gap__"
+    }
+}
